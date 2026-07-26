@@ -5,6 +5,13 @@
 Starter project for a responsive browser-based 3D multiplayer game.
 
 
+## Version 0.19.13 — School-network itch.io safeguard
+
+- Confirmed the browser client connects directly to the configured multiplayer server and does not request `/health`.
+- The itch.io packaging script now scans the built HTML, JavaScript and CSS and refuses to create an upload ZIP if `/health` appears in any browser file.
+- Render may continue using `/health` as its own server-side health-check path; that check is not made by students’ devices.
+- Do not add an HTTP health-check preflight before Colyseus connection attempts. Server wake and retry messaging must use the normal multiplayer connection path.
+
 ## Version 0.19.12 — TypeScript Build Fix
 
 - Removed the obsolete private `addProps()` method left behind after the 5×5 museum prop system replaced it.

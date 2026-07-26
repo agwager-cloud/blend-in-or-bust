@@ -1,4 +1,11 @@
-# Publishing Blend in or Bust v0.19.11
+# Publishing Blend in or Bust v0.19.13
+
+
+## School-network connection rule
+
+The itch.io browser client must **not** call `https://blend-in-or-bust-server.onrender.com/health` before connecting. It connects through the normal Colyseus multiplayer path instead.
+
+Render's configured `Health Check Path: /health` may remain enabled because that request is made by Render infrastructure, not by the itch.io client or student devices. The packaging script validates that `/health` is absent from all browser build files before creating the itch.io ZIP.
 
 ## Expected production addresses
 
@@ -42,6 +49,6 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-itch.ps1 -RenderUrl "ht
 
 Upload:
 
-`release\Blend-in-or-Bust-v0.19.11-itch.zip`
+`release\Blend-in-or-Bust-v0.19.13-itch.zip`
 
 The build script verifies that `index.html` is at the root of the ZIP.
