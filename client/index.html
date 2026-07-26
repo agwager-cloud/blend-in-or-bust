@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no, interactive-widget=resizes-content" />
+    <meta name="theme-color" content="#11104a" />
+    <title>Blend in or Bust</title>
+  </head>
+  <body>
+    <div id="app">
+      <section id="title-screen" class="screen title-screen">
+        <div class="login-card" aria-label="Game sign in">
+          <label>
+            <span>PLAYER NAME</span>
+            <input id="player-name" maxlength="16" autocomplete="off" placeholder="Enter your name" />
+          </label>
+          <label>
+            <span>ROOM CODE</span>
+            <input id="room-code" maxlength="5" inputmode="numeric" autocomplete="off" placeholder="12345" />
+          </label>
+          <div class="button-row">
+            <button id="host-button" class="primary">HOST GAME</button>
+            <button id="join-button">JOIN GAME</button>
+          </div>
+          <button id="practice-button" class="practice">EXPLORE MIDNIGHT MUSEUM</button>
+          <p id="form-message" role="status">Movement prototype • Keyboard, mouse and touch ready</p>
+        </div>
+      </section>
+
+      <section id="lobby-screen" class="screen lobby-screen hidden">
+        <main class="lobby-card">
+          <div class="lobby-heading">
+            <div>
+              <span class="eyebrow">MULTIPLAYER LOBBY</span>
+              <h1>ROOM <strong id="lobby-code">-----</strong></h1>
+            </div>
+            <div id="connection-status" class="connection-status">CONNECTING</div>
+          </div>
+          <p id="lobby-message">Share this code with friends on the same server.</p>
+          <div id="player-list" class="player-list" aria-live="polite"></div>
+          <div id="host-settings" class="host-settings hidden">
+            <label>
+              <span>ROUND TIME</span>
+              <select id="round-time">
+                <option value="180">3 minutes</option>
+                <option value="240" selected>4 minutes</option>
+                <option value="300">5 minutes</option>
+              </select>
+            </label>
+            <label>
+              <span>BUSTERS</span>
+              <select id="blender-count">
+                <option value="0" selected>Automatic</option>
+                <option value="1">1 Buster</option>
+                <option value="2">2 Busters</option>
+                <option value="3">3 Busters</option>
+                <option value="4">4 Busters</option>
+              </select>
+            </label>
+            <label>
+              <span>TESTING BOTS</span>
+              <select id="bots-enabled">
+                <option value="off" selected>Off</option>
+                <option value="on">On — add 8 bots</option>
+                <option value="balanced">On — split 2 human roles</option>
+              </select>
+            </label>
+          </div>
+          <div class="lobby-actions">
+            <button id="start-button" class="primary hidden">START PRACTICE MATCH</button>
+            <button id="leave-button">LEAVE ROOM</button>
+          </div>
+        </main>
+      </section>
+
+      <section id="game-screen" class="screen game-screen hidden">
+        <canvas id="game-canvas" aria-label="Blend in or Bust 3D arena"></canvas>
+        <header class="hud-top">
+          <button id="back-button" class="icon-button" aria-label="Return to title">←</button>
+          <div class="status-pill arena-status">
+            <strong id="arena-title">MIDNIGHT MUSEUM</strong>
+            <span id="arena-subtitle">Hide. Deceive. Survive.</span>
+          </div>
+          <div class="status-pill players">
+            <strong id="players-counter">● 0 ACTIVE</strong>
+            <span id="busted-counter">0 busted</span>
+          </div>
+          <div class="status-pill flags">
+            <strong id="flags-counter">⚑ 0 / 0</strong>
+            <span id="rubbish-counter">🗑 0 left</span>
+          </div>
+          <div class="status-pill timer">
+            <strong id="round-timer">--:--</strong>
+          </div>
+        </header>
+        <aside id="museum-map" class="museum-map" aria-label="Museum map">
+          <strong>MUSEUM MAP</strong>
+          <div id="museum-map-grid" class="museum-map-grid"></div>
+        </aside>
+        <div class="touch-info-stack">
+          <div class="hint-card">
+            <strong>MOVE AND BE KNOWN</strong>
+            <span>Your name fades when you stand still.</span>
+          </div>
+          <div class="portrait-orientation-note">Landscape gives you the best view</div>
+          <div id="room-name-badge" class="room-name-badge">MIDNIGHT ATRIUM</div>
+        </div>
+        <div id="player-label" class="player-label">PLAYER</div>
+        <div id="remote-labels" class="remote-labels"></div>
+        <div id="move-stick" class="touch-stick move-stick" aria-hidden="true">
+          <div class="stick-label">MOVE</div>
+          <div class="stick-knob"></div>
+        </div>
+        <div id="look-zone" class="look-zone" aria-hidden="true">
+          <span>SWIPE TO LOOK</span>
+        </div>
+        <div id="blend-message" class="blend-message">Move close to a prop to blend</div>
+        <button id="blend-button" class="action-button" disabled>
+          <span class="blend-label">BLEND</span>
+          <span class="key-hint">E</span>
+        </button>
+        <button id="bust-button" class="action-button bust-button hidden" disabled>
+          <span>BUST</span>
+          <span class="key-hint">F</span>
+        </button>
+        <button id="lift-button" class="action-button bust-button hidden" disabled>
+          <span>LIFT</span>
+          <span class="key-hint">F</span>
+        </button>
+        <button id="report-button" class="action-button report-button hidden" disabled>
+          <span>REPORT</span>
+          <span class="key-hint">R</span>
+        </button>
+        <div id="busted-banner" class="busted-banner hidden">
+          <strong>BUSTED!</strong>
+          <span>Silent spectator — watch, but do not reveal who you suspect.</span>
+        </div>
+        <div id="spectator-badge" class="spectator-badge hidden">
+          <span>SECURITY CAMERA</span>
+          <strong id="spectator-name">MIDNIGHT ATRIUM</strong>
+          <small id="spectator-room-count">ROOM 13 OF 25</small>
+        </div>
+        <div id="spectator-controls" class="spectator-controls hidden" aria-label="Security camera room controls">
+          <button id="spectator-prev-room" type="button" aria-label="Previous room">◀</button>
+          <span>SWITCH ROOM</span>
+          <button id="spectator-next-room" type="button" aria-label="Next room">▶</button>
+        </div>
+        <div id="security-camera-effect" class="security-camera-effect hidden" aria-hidden="true">
+          <span class="security-rec">● REC</span>
+          <span class="security-channel">CAM 13</span>
+        </div>
+        <section id="privacy-blackout" class="privacy-blackout hidden">
+          <div class="blackout-orbit orbit-one"></div>
+          <div class="blackout-orbit orbit-two"></div>
+          <div class="blackout-card">
+            <span>IDENTITY PROTECTED</span>
+            <h2>BUSTED!</h2>
+            <p>Your view is hidden while the Buster escapes.</p>
+            <strong id="blackout-countdown">15</strong>
+            <small>Silent spectator mode will begin automatically.</small>
+          </div>
+        </section>
+        <section id="role-reveal" class="game-overlay hidden">
+          <div class="reveal-card">
+            <span>YOUR SECRET ROLE</span>
+            <h2 id="role-title">BLENDER</h2>
+            <p id="role-instructions">Your private role instructions will appear here.</p>
+            <strong id="reveal-countdown">Get ready...</strong>
+          </div>
+        </section>
+        <section id="meeting-overlay" class="meeting-overlay hidden">
+          <div class="meeting-panel">
+            <header class="meeting-heading">
+              <div>
+                <span id="meeting-eyebrow">SCENE REPORTED</span>
+                <h2 id="meeting-title">DISCUSS!</h2>
+                <p id="meeting-message">Talk aloud and decide who may be a Buster.</p>
+              </div>
+              <strong id="meeting-timer">15</strong>
+            </header>
+            <div id="vote-grid" class="vote-grid"></div>
+            <button id="skip-vote-button" class="skip-vote hidden">SKIP VOTE</button>
+            <p id="vote-status">Movement and the round timer are paused.</p>
+          </div>
+        </section>
+        <section id="results-overlay" class="game-overlay hidden">
+          <div class="results-card">
+            <span>ROUND COMPLETE</span>
+            <h2 id="winner-title">BLENDERS WIN!</h2>
+            <p id="winner-message">Every flag was found and the museum was cleaned in time.</p>
+            <button id="return-lobby-button" class="primary hidden">RETURN TO LOBBY</button>
+            <p id="results-waiting">Waiting for the host...</p>
+          </div>
+        </section>
+      </section>
+    </div>
+    <button id="sound-toggle" class="sound-toggle" type="button" aria-label="Mute background music">
+      <span aria-hidden="true">🔊</span>
+      <strong>MUSIC ON</strong>
+    </button>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

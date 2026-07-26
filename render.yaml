@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: blend-in-or-bust-server
+    runtime: node
+    region: singapore
+    plan: free
+    branch: main
+    buildCommand: npm ci && npm run build -w server
+    startCommand: npm run start -w server
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: 20.19.5
