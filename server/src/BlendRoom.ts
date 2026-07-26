@@ -76,6 +76,15 @@ export class BlendRoom extends Room<GameState> {
   // Blender and reset the 2.4-second Bust preparation forever.
   private botPursuitLocks = new Map<string, { targetId: string; lockedUntil: number }>();
   private postMeetingMoveBlockedUntil = 0;
+  // A round does not begin until every active human has both loaded the 3D
+  // museum and acknowledged their private role. This prevents the timer from
+  // expiring behind a loading screen and guarantees the host can move when the
+  // arena becomes visible.
+  private roundReadyClients = new Set<string>();
+  private roleReadyClients = new Set<string>();
+  private roundLoadingDeadline = 0;
+  private static readonly ROUND_LOADING_TIMEOUT_MS = 120_000;
+  private static readonly SYNCHRONIZED_REVEAL_MS = 4_000;
 
   onCreate(): void {
     this.roomCode = createRoomCode();
@@ -234,6 +243,18 @@ export class BlendRoom extends Room<GameState> {
       this.votes.set(client.sessionId, targetId);
       this.state.votesCast = this.votes.size;
       if (this.votes.size >= this.eligibleVoters().length) this.resolveVote();
+    });
+    this.onMessage("round-ready", (client) => {
+      const player = this.state.players.get(client.sessionId);
+      if (this.state.phase !== "loading" || !player?.alive || player.isBot || player.isLateSpectator) return;
+      this.roundReadyClients.add(client.sessionId);
+      this.tryBeginSynchronizedReveal();
+    });
+    this.onMessage("role-ready", (client) => {
+      const player = this.state.players.get(client.sessionId);
+      if (this.state.phase !== "loading" || !player?.alive || player.isBot || player.isLateSpectator) return;
+      this.roleReadyClients.add(client.sessionId);
+      this.tryBeginSynchronizedReveal();
     });
     this.onMessage("spectator-ready", (client) => {
       const spectator = this.state.players.get(client.sessionId);
@@ -419,6 +440,8 @@ export class BlendRoom extends Room<GameState> {
     this.botPendingBlend.delete(sessionId);
     this.botBustTargetSince.delete(sessionId);
     this.botPursuitLocks.delete(sessionId);
+    this.roundReadyClients.delete(sessionId);
+    this.roleReadyClients.delete(sessionId);
     for (const [botId, pursuit] of this.botPursuitLocks) {
       if (pursuit.targetId === sessionId) this.botPursuitLocks.delete(botId);
     }
@@ -430,6 +453,7 @@ export class BlendRoom extends Room<GameState> {
         .find((candidate) => !candidate.isBot && !candidate.isLateSpectator);
       if (next) next.isHost = true;
     }
+    if (this.state.phase === "loading") this.tryBeginSynchronizedReveal();
   }
 
   onDispose(): void {
@@ -478,6 +502,9 @@ export class BlendRoom extends Room<GameState> {
     this.botPendingBlend.clear();
     this.botBustTargetSince.clear();
     this.botPursuitLocks.clear();
+    this.roundReadyClients.clear();
+    this.roleReadyClients.clear();
+    this.roundLoadingDeadline = 0;
     this.votes.clear();
     this.roundSpawns.clear();
     this.lastSpectatorConcealAt.clear();
@@ -558,16 +585,6 @@ export class BlendRoom extends Room<GameState> {
       const role = index < blenderCount ? "blender" : "seeker";
       this.roles.set(sessionId, role);
     });
-    shuffled.forEach((sessionId) => {
-      const role = this.roles.get(sessionId)!;
-      this.clients.find((client) => client.sessionId === sessionId)?.send("role", {
-        role,
-        blenderCount,
-        blenderTeammates: role === "blender"
-          ? shuffled.slice(0, blenderCount).filter((id) => id !== sessionId)
-          : [],
-      });
-    });
     // Late CCTV viewers do not increase role counts or museum objectives.
     this.createFlags(this.flagCountForPlayers(participantIds.length));
     this.createRubbish(this.rubbishCountForPlayers(participantIds.length));
@@ -591,17 +608,58 @@ export class BlendRoom extends Room<GameState> {
     this.state.flagsFound = 0;
     this.state.rubbishCollected = 0;
     this.state.winner = "";
-    this.state.phase = "reveal";
-    this.state.revealEndsAt = Date.now() + 6000;
-    this.state.roundEndsAt = this.state.revealEndsAt + this.state.roundSeconds * 1000;
-    this.state.revealSecondsRemaining = 6;
+    this.state.phase = "loading";
+    this.state.revealEndsAt = 0;
+    this.state.roundEndsAt = 0;
+    this.state.revealSecondsRemaining = 0;
     this.state.roundSecondsRemaining = this.state.roundSeconds;
     this.state.meetingSecondsRemaining = 0;
+    this.roundLoadingDeadline = Date.now() + BlendRoom.ROUND_LOADING_TIMEOUT_MS;
+
+    // Send private roles only after the authoritative loading phase is active.
+    // Players may acknowledge immediately while their museum continues loading;
+    // the timer will not begin until both acknowledgements are complete.
+    shuffled.forEach((sessionId) => {
+      const role = this.roles.get(sessionId)!;
+      this.clients.find((client) => client.sessionId === sessionId)?.send("role", {
+        role,
+        blenderCount,
+        blenderTeammates: role === "blender"
+          ? shuffled.slice(0, blenderCount).filter((id) => id !== sessionId)
+          : [],
+      });
+    });
+  }
+
+  private activeHumanSessionIds(): string[] {
+    return [...this.state.players]
+      .filter(([, player]) => player.alive && !player.isBot && !player.isLateSpectator)
+      .map(([sessionId]) => sessionId);
+  }
+
+  private tryBeginSynchronizedReveal(now = Date.now()): void {
+    if (this.state.phase !== "loading") return;
+    const humans = this.activeHumanSessionIds();
+    if (humans.length === 0) return;
+    const everyoneReady = humans.every((sessionId) =>
+      this.roundReadyClients.has(sessionId) && this.roleReadyClients.has(sessionId));
+    if (!everyoneReady && now < this.roundLoadingDeadline) return;
+    this.beginSynchronizedReveal(now);
+  }
+
+  private beginSynchronizedReveal(now: number): void {
+    if (this.state.phase !== "loading") return;
+    this.state.phase = "reveal";
+    this.state.revealEndsAt = now + BlendRoom.SYNCHRONIZED_REVEAL_MS;
+    this.state.roundEndsAt = this.state.revealEndsAt + this.state.roundSeconds * 1000;
+    this.state.revealSecondsRemaining = Math.ceil(BlendRoom.SYNCHRONIZED_REVEAL_MS / 1000);
+    this.state.roundSecondsRemaining = this.state.roundSeconds;
+
     [...this.state.players]
       .filter(([, player]) => player.isBot)
       .forEach(([id], index) => {
-        // Blender bots begin purposeful flag searches much sooner, but still
-        // leave humans time to search first and never collect the final flag.
+        // Bot searching begins only after the synchronized reveal, so the
+        // opening grace period and round timer are identical for every client.
         const firstFlagInspection = this.state.revealEndsAt + 10_000 + index * 1_500;
         this.botFlagReadyAt.set(id, firstFlagInspection);
         this.botNextInspectAt.set(id, this.state.revealEndsAt + 1_800 + index * 500);
@@ -610,7 +668,9 @@ export class BlendRoom extends Room<GameState> {
 
   private updateRound(): void {
     const now = Date.now();
-    if (this.state.phase === "reveal" && now >= this.state.revealEndsAt) {
+    if (this.state.phase === "loading") {
+      this.tryBeginSynchronizedReveal(now);
+    } else if (this.state.phase === "reveal" && now >= this.state.revealEndsAt) {
       this.state.phase = "game";
     } else if (this.state.phase === "game" && now >= this.state.roundEndsAt) {
       this.finishRound("blenders");
@@ -650,7 +710,7 @@ export class BlendRoom extends Room<GameState> {
     this.state.revealSecondsRemaining = this.state.phase === "reveal"
       ? Math.max(0, Math.ceil((this.state.revealEndsAt - now) / 1000))
       : 0;
-    if (this.state.phase === "reveal") {
+    if (this.state.phase === "loading" || this.state.phase === "reveal") {
       this.state.roundSecondsRemaining = this.state.roundSeconds;
     } else if (this.state.phase === "game") {
       this.state.roundSecondsRemaining = Math.max(0, Math.ceil((this.state.roundEndsAt - now) / 1000));
@@ -1024,6 +1084,9 @@ export class BlendRoom extends Room<GameState> {
     this.state.roundSecondsRemaining = 0;
     this.state.meetingSecondsRemaining = 0;
     this.state.players.forEach((player) => { player.moving = false; });
+    this.roundReadyClients.clear();
+    this.roleReadyClients.clear();
+    this.roundLoadingDeadline = 0;
   }
 
   private resetToLobby(): void {
@@ -1038,6 +1101,9 @@ export class BlendRoom extends Room<GameState> {
     this.botFlagFindLimit = 0;
     this.botBustTargetSince.clear();
     this.botPursuitLocks.clear();
+    this.roundReadyClients.clear();
+    this.roleReadyClients.clear();
+    this.roundLoadingDeadline = 0;
     this.state.flags.clear();
     this.state.rubbish.clear();
     this.state.crimes.clear();

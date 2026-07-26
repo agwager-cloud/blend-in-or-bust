@@ -1,8 +1,8 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-echo Building the current client and creating the itch.io upload ZIP...
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\build-itch.ps1"
+echo Building the current client and creating a NEW itch.io upload ZIP...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\build-itch.ps1" -Version "0.19.24"
 if errorlevel 1 (
   echo.
   echo Build or packaging failed. Please copy the complete error and send it to ChatGPT.
@@ -10,5 +10,7 @@ if errorlevel 1 (
   exit /b 1
 )
 echo.
-echo Finished. Upload release\Blend-in-or-Bust-v0.19.20-itch.zip to itch.io.
+echo Finished. The new v0.19.24 ZIP is in the release folder.
+echo If a v0.19.24 ZIP already existed, a timestamp was added so the older file was not overwritten.
+start "" "%~dp0release"
 pause

@@ -388,14 +388,6 @@ select {
   pointer-events: none;
 }
 
-.hud-top button { pointer-events: auto; }
-
-.icon-button {
-  width: 48px;
-  min-width: 48px;
-  padding: 0;
-  font-size: 25px;
-}
 
 .status-pill {
   display: grid;
@@ -413,7 +405,15 @@ select {
 .status-pill.players { min-width: 92px; text-align: center; }
 .status-pill.players strong { color: #69f6c2; }
 .status-pill.players span { color: #ff91b4; }
-.status-pill.arena-status { min-width: 150px; }
+.status-pill.arena-status {
+  min-width: 210px;
+  padding-inline: 18px;
+}
+.status-pill.arena-status strong {
+  font-size: 15px;
+  letter-spacing: .015em;
+}
+.status-pill.arena-status span { font-size: 11px; }
 .status-pill.flags { margin-left: 0; text-align: right; }
 .status-pill.flags.frenzy {
   border-color: #ff4f9b;
@@ -880,11 +880,27 @@ select {
     gap: 3px;
     align-items: stretch;
   }
-  .icon-button { width: 36px; min-width: 36px; min-height: 44px; font-size: 21px; }
   .status-pill { min-width: 0; min-height: 44px; padding: 6px 5px; overflow: hidden; }
-  .status-pill.arena-status { flex: 1 1 90px; min-width: 74px; max-width: none; }
-  .status-pill.arena-status strong { overflow: hidden; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-  .status-pill.arena-status span { display: none; }
+  .status-pill.arena-status {
+    flex: 1 1 112px;
+    min-width: 90px;
+    max-width: none;
+    padding-inline: 7px;
+  }
+  .status-pill.arena-status strong {
+    overflow: hidden;
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .status-pill.arena-status span {
+    display: block;
+    overflow: hidden;
+    font-size: 7.5px;
+    line-height: 1.05;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .status-pill.players { flex: 0 0 62px; min-width: 62px; }
   .status-pill.players strong, .status-pill.flags strong { font-size: 9px; letter-spacing: -.02em; white-space: nowrap; }
   .status-pill.flags { flex: 0 0 46px; min-width: 46px; text-align: center; }
@@ -904,8 +920,7 @@ select {
 
 @media (max-width: 380px) {
   .hud-top { gap: 2px; }
-  .icon-button { width: 34px; min-width: 34px; }
-  .status-pill.arena-status { min-width: 68px; }
+  .status-pill.arena-status { min-width: 82px; }
   .status-pill.arena-status strong,
   .status-pill.players strong,
   .status-pill.flags strong { font-size: 8.5px; }
@@ -1508,4 +1523,43 @@ select {
 /* v0.19.21 - role reveal must remain above the first museum load screen. */
 #role-reveal.role-reveal-priority {
   z-index: 140;
+}
+
+
+/* v0.19.22 - the gameplay HUD has no accidental disconnect control.
+   The freed space is used for a larger room code and connected-player panel. */
+.status-pill.arena-status { flex-shrink: 0; }
+@media (max-width: 520px) {
+  .status-pill.arena-status { flex-shrink: 1; }
+}
+
+
+/* v0.19.23 - the secret role is a required acknowledgement screen.
+   It remains above museum loading and cannot disappear just because the
+   server reveal countdown has already finished. */
+.role-continue-button {
+  width: 100%;
+  margin-top: 18px;
+  padding: 14px 18px;
+  border: 0;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #caff4f, #79df24);
+  color: #100b35;
+  font-size: clamp(15px, 3vw, 19px);
+  font-weight: 950;
+  letter-spacing: .02em;
+  cursor: pointer;
+  box-shadow: 0 6px 0 rgba(38, 104, 19, .72);
+}
+.role-continue-button:active {
+  transform: translateY(3px);
+  box-shadow: 0 3px 0 rgba(38, 104, 19, .72);
+}
+.reveal-card.buster .role-continue-button {
+  background: linear-gradient(180deg, #ff9dba, #ff5d91);
+  box-shadow: 0 6px 0 rgba(124, 24, 65, .72);
+}
+#role-reveal.role-reveal-priority {
+  z-index: 180;
+  pointer-events: all;
 }

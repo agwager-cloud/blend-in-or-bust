@@ -1,6 +1,6 @@
 param(
     [string]$RenderUrl = "https://blend-in-or-bust-server.onrender.com",
-    [string]$Version = "0.19.20"
+    [string]$Version = "0.19.24"
 )
 
 $ErrorActionPreference = "Stop"
@@ -84,7 +84,13 @@ if ($absolutePublicReferences) {
 
 $releasePath = Join-Path $projectRoot "release"
 New-Item -ItemType Directory -Force -Path $releasePath | Out-Null
-$zipPath = Join-Path $releasePath "Blend-in-or-Bust-v$Version-itch.zip"
+$baseZipName = "Blend-in-or-Bust-v$Version-itch.zip"
+$zipPath = Join-Path $releasePath $baseZipName
+if (Test-Path $zipPath) {
+    $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    $zipPath = Join-Path $releasePath "Blend-in-or-Bust-v$Version-itch-$stamp.zip"
+    Write-Host "The normal v$Version ZIP already exists, so this build will use a timestamped filename instead of overwriting it." -ForegroundColor Yellow
+}
 
 # Create standards-compliant ZIP entries using forward slashes. This prevents
 # itch.io 404s where index.html asks for assets/file.js but the Windows archive

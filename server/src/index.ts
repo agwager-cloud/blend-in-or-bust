@@ -31,7 +31,16 @@ const httpServer = createServer((request, response) => {
 });
 
 const gameServer = new Server({
-  transport: new WebSocketTransport({ server: httpServer }),
+  transport: new WebSocketTransport({
+    server: httpServer,
+    // The first Babylon museum build can briefly occupy the browser main
+    // thread on iPads and slower laptops. Colyseus defaults to disconnecting
+    // after two missed 3-second pings, which was ending the room while the
+    // loading screen was still visible. Allow up to three minutes for the first
+    // load while keeping normal heartbeat checks enabled.
+    pingInterval: 10_000,
+    pingMaxRetries: 18,
+  }),
 });
 
 gameServer.define("blend_room", BlendRoom);

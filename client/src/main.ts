@@ -28,6 +28,9 @@ import "./style.css";
 const assetUrl = (path: string): string =>
   `${import.meta.env.BASE_URL}${path.replace(/^\/+/, "")}`;
 
+const connectedPlayersLabel = (count: number): string =>
+  `${count} ${count === 1 ? "player" : "players"} connected`;
+
 const titleBackgroundUrl = new URL(
   assetUrl("assets/title-background.jpg"),
   document.baseURI,
@@ -100,6 +103,7 @@ const revealCard = roleReveal.querySelector<HTMLElement>(".reveal-card")!;
 const roleTitle = document.querySelector<HTMLElement>("#role-title")!;
 const roleInstructions = document.querySelector<HTMLElement>("#role-instructions")!;
 const revealCountdown = document.querySelector<HTMLElement>("#reveal-countdown")!;
+const roleContinueButton = document.querySelector<HTMLButtonElement>("#role-continue-button")!;
 const resultsOverlay = document.querySelector<HTMLElement>("#results-overlay")!;
 const winnerTitle = document.querySelector<HTMLElement>("#winner-title")!;
 const winnerMessage = document.querySelector<HTMLElement>("#winner-message")!;
@@ -147,8 +151,8 @@ let arenaEntryGeneration = 0;
 let arenaEntryPromise: Promise<void> | undefined;
 let arenaEntryRoom: Room<any> | undefined;
 let museumLoadPromise: Promise<PracticeGame> | undefined;
-let roleRevealMinimumUntil = 0;
-let roleRevealDismissTimer: number | undefined;
+let roleAcknowledgedForRound = true;
+let roleReadySentForRound = false;
 
 const SERVER_WAKE_WINDOW_MS = 60_000;
 const CONNECTION_ATTEMPT_TIMEOUT_MS = 14_000;
@@ -492,7 +496,7 @@ async function connectMultiplayer(action: MultiplayerAction): Promise<void> {
         titleScreen.classList.add("hidden");
         lobbyScreen.classList.remove("hidden");
         updateLobby();
-        if (["reveal", "game", "discussion", "voting", "verdict", "results"]
+        if (["loading", "reveal", "game", "discussion", "voting", "verdict", "results"]
           .includes(String(opened.room.state.phase))) {
           requestEnterMultiplayerArena(opened.room);
         }
@@ -541,14 +545,13 @@ function bindRoom(room: Room<any>, client: Client): void {
   }) => {
     if (!isCurrentRoom(room)) return;
     localRole = role;
+    roleAcknowledgedForRound = false;
+    roleReadySentForRound = false;
     blenderTeammates = new Set(teammateIds);
     game?.resetForRound();
     updateRoleReveal();
-    // Show the assigned role immediately, above the museum loader, and keep it
-    // visible for long enough to read even when the first 3D scene is still
-    // preparing on a slower phone, iPad or school laptop.
-    requestEnterMultiplayerArena(room);
-    showAssignedRole(room);
+    roleReveal.classList.add("role-reveal-priority");
+    roleReveal.classList.remove("hidden");
   });
   room.onMessage("disguise-changed", ({
     sessionId,
@@ -596,15 +599,6 @@ function bindRoom(room: Room<any>, client: Client): void {
     if (!isCurrentRoom(room)) return;
     game?.setGlobalBustCooldown(durationMs);
   });
-  room.onMessage("bust-rejected", ({
-    targetSessionId,
-  }: {
-    targetSessionId: string;
-    reason?: string;
-  }) => {
-    if (!isCurrentRoom(room)) return;
-    game?.rejectOptimisticBust(targetSessionId);
-  });
   room.onMessage("flag-found", ({ by }: { by: string }) => {
     if (!isCurrentRoom(room)) return;
     flagsCounter.animate(
@@ -649,13 +643,25 @@ function bindRoom(room: Room<any>, client: Client): void {
   room.onStateChange(() => {
     if (!isCurrentRoom(room)) return;
     updateLobby();
-    const matchInProgress = ["reveal", "game", "discussion", "voting", "verdict", "results"]
-      .includes(String(room.state?.phase));
+    const phase = String(room.state?.phase ?? "lobby");
+    const matchInProgress = ["loading", "reveal", "game", "discussion", "voting", "verdict", "results"]
+      .includes(phase);
     if (matchInProgress && gameScreen.classList.contains("hidden")) {
       requestEnterMultiplayerArena(room);
     }
     updateMatchScreens(room);
     updateMeetingUi(room);
+    if (!gameScreen.classList.contains("hidden") && game) {
+      if (phase === "loading") {
+        showSceneLoading("Museum ready. Waiting for the other players...");
+      } else if (phase === "reveal") {
+        // The server starts a fresh reveal only after all active devices report
+        // that their museum is loaded. Remove the loading screen now so every
+        // player receives the complete synchronized role countdown.
+        updateRoleReveal();
+        window.requestAnimationFrame(() => hideSceneLoading());
+      }
+    }
   });
   room.onLeave(async (code) => {
     if (activeRoom !== room) return;
@@ -743,20 +749,8 @@ function updateRoleReveal(): void {
     ? "You cannot collect flags or rubbish. Disguise yourself, deceive the Blenders and Bust them before they complete the museum objectives."
     : "Find every hidden flag, clean up the rubbish, survive the Busters and report crime scenes.";
   revealCard.classList.toggle("buster", buster);
-}
-
-function showAssignedRole(room: Room<any>): void {
-  if (!isCurrentRoom(room) || localRole === "practice") return;
-  roleRevealMinimumUntil = performance.now() + 5_500;
-  roleReveal.classList.add("role-reveal-priority");
-  roleReveal.classList.remove("hidden");
-  if (roleRevealDismissTimer !== undefined) window.clearTimeout(roleRevealDismissTimer);
-  roleRevealDismissTimer = window.setTimeout(() => {
-    roleRevealDismissTimer = undefined;
-    roleRevealMinimumUntil = 0;
-    roleReveal.classList.remove("role-reveal-priority");
-    if (isCurrentRoom(room)) updateMatchScreens(room);
-  }, 5_500);
+  revealCountdown.textContent = "Read your role carefully before continuing.";
+  roleContinueButton.disabled = false;
 }
 
 function updateMatchScreens(room: Room<any>): void {
@@ -766,12 +760,10 @@ function updateMatchScreens(room: Room<any>): void {
   const phase = String(room.state?.phase ?? "lobby");
   const local = players.get(room.sessionId);
   const lateSpectator = Boolean(local?.isLateSpectator);
-  const heldRoleReveal = !lateSpectator
-    && localRole !== "practice"
-    && performance.now() < roleRevealMinimumUntil;
-  const showRoleReveal = !lateSpectator && (phase === "reveal" || heldRoleReveal);
-  roleReveal.classList.toggle("role-reveal-priority", heldRoleReveal);
-  roleReveal.classList.toggle("hidden", !showRoleReveal);
+  const hasPrivateRole = localRole === "seeker" || localRole === "blender";
+  const shouldShowRole = !lateSpectator && hasPrivateRole && !roleAcknowledgedForRound;
+  roleReveal.classList.toggle("hidden", !shouldShowRole);
+  roleReveal.classList.toggle("role-reveal-priority", shouldShowRole);
   resultsOverlay.classList.toggle("hidden", phase !== "results");
   flagsCounter.textContent = `FLAGS ${room.state.flagsFound} / ${room.state.flagsRequired}`;
   const rubbishLeft = Math.max(0, Number(room.state.rubbishRequired ?? 0) - Number(room.state.rubbishCollected ?? 0));
@@ -804,9 +796,12 @@ function updateMatchScreens(room: Room<any>): void {
     game?.pause();
     resultsOverlay.classList.add("hidden");
     roleReveal.classList.add("hidden");
+    roleReveal.classList.remove("role-reveal-priority");
     gameScreen.classList.add("hidden");
     lobbyScreen.classList.remove("hidden");
     localRole = "practice";
+    roleAcknowledgedForRound = true;
+    roleReadySentForRound = false;
     updateLobby();
   }
 }
@@ -876,6 +871,21 @@ function submitVote(targetId: string): void {
 
 skipVoteButton.addEventListener("click", () => submitVote("skip"));
 
+roleContinueButton.addEventListener("click", () => {
+  roleAcknowledgedForRound = true;
+  if (!roleReadySentForRound && activeRoom) {
+    roleReadySentForRound = true;
+    activeRoom.send("role-ready");
+  }
+  roleReveal.classList.add("hidden");
+  roleReveal.classList.remove("role-reveal-priority");
+  if (activeRoom?.state?.phase === "loading") {
+    showSceneLoading(game
+      ? "Role confirmed. Waiting for the other players..."
+      : "Role confirmed. Loading the museum...");
+  }
+});
+
 function showSceneLoading(message: string): void {
   sceneLoadingMessage.textContent = message;
   sceneLoading.classList.remove("hidden");
@@ -940,7 +950,7 @@ async function enterMultiplayerArena(room: Room<any>, generation: number): Promi
   showSceneLoading("Loading the museum...");
   arenaTitle.textContent = `ROOM ${String(room.state?.roomCode ?? "")}`;
   const playersBeforeLoad = roomPlayers(room);
-  arenaSubtitle.textContent = `${Number(playersBeforeLoad?.size ?? 0)} players connected`;
+  arenaSubtitle.textContent = connectedPlayersLabel(Number(playersBeforeLoad?.size ?? 0));
   playerLabel.textContent = nameInput.value.trim().toUpperCase();
 
   const loadedGame = await ensureMuseumLoaded();
@@ -962,11 +972,22 @@ async function enterMultiplayerArena(room: Room<any>, generation: number): Promi
     loadedGame.setSpectatorConcealment(pendingSpectatorConcealment);
   }
   const local = roomPlayers(room)?.get(room.sessionId);
-  if (local?.isLateSpectator) room.send("spectator-ready");
+  if (local?.isLateSpectator) {
+    room.send("spectator-ready");
+  } else {
+    // Tell the server only after this device has finished building the museum.
+    // The synchronized role reveal begins after every active human is ready,
+    // so a slow first load can no longer hide the player's role card.
+    room.send("round-ready");
+  }
   loadedGame.resume();
   updateRoleReveal();
   updateMatchScreens(room);
-  window.requestAnimationFrame(() => hideSceneLoading());
+  if (String(room.state?.phase) === "loading") {
+    showSceneLoading("Museum ready. Waiting for the other players...");
+  } else {
+    window.requestAnimationFrame(() => hideSceneLoading());
+  }
 }
 
 function requestEnterMultiplayerArena(room: Room<any>): void {
@@ -1015,18 +1036,6 @@ async function enterPractice(): Promise<void> {
 hostButton.addEventListener("click", () => void connectMultiplayer("host"));
 joinButton.addEventListener("click", () => void connectMultiplayer("join"));
 practiceButton.addEventListener("click", enterPractice);
-document.querySelector("#back-button")!.addEventListener("click", () => {
-  arenaEntryGeneration += 1;
-  hideSceneLoading();
-  if (activeRoom) {
-    leaveRoom(true);
-    return;
-  }
-  game?.pause();
-  gameScreen.classList.add("hidden");
-  lobbyScreen.classList.add("hidden");
-  titleScreen.classList.remove("hidden");
-});
 const currentLobbySettings = () => ({
   roundSeconds: Number(roundTimeSelect.value),
   blenderOverride: Number(blenderCountSelect.value),
@@ -1044,6 +1053,10 @@ document.querySelector("#leave-button")!.addEventListener("click", () => leaveRo
 function leaveRoom(consented: boolean, message = "You left the room."): void {
   arenaEntryGeneration += 1;
   hideSceneLoading();
+  roleAcknowledgedForRound = true;
+  roleReadySentForRound = false;
+  roleReveal.classList.add("hidden");
+  roleReveal.classList.remove("role-reveal-priority");
   const room = activeRoom;
   activeRoom = undefined;
   if (consented) void room?.leave(true);
@@ -1057,12 +1070,6 @@ function leaveRoom(consented: boolean, message = "You left the room."): void {
   localRole = "practice";
   blenderTeammates.clear();
   pendingSpectatorConcealment = [];
-  roleRevealMinimumUntil = 0;
-  if (roleRevealDismissTimer !== undefined) {
-    window.clearTimeout(roleRevealDismissTimer);
-    roleRevealDismissTimer = undefined;
-  }
-  roleReveal.classList.remove("role-reveal-priority");
   roleReveal.classList.add("hidden");
   resultsOverlay.classList.add("hidden");
   meetingOverlay.classList.add("hidden");
@@ -1149,9 +1156,6 @@ class PracticeGame {
   private spectatorConcealmentReady = true;
   private movementSuppressedUntil = 0;
   private bustTargetId = "";
-  private optimisticBustTargetId = "";
-  private optimisticBustRollbackTimer: number | undefined;
-  private lastBustPointerActivationAt = -Infinity;
   private liftTargetId = "";
   private lastLiftAnimationAt = -Infinity;
   private liftLockedUntil = -Infinity;
@@ -1314,7 +1318,6 @@ class PracticeGame {
     this.spectatorPrivacyActive = false;
     this.spectatorConcealedPlayers.clear();
     this.remoteDisguiseOverrides.clear();
-    this.clearOptimisticBust(false);
     this.globalBustBlockedUntil = 0;
     this.camera.lowerBetaLimit = 0.82;
     this.camera.upperRadiusLimit = 11;
@@ -1351,22 +1354,6 @@ class PracticeGame {
   }
 
   handleBust(targetSessionId: string): void {
-    if (targetSessionId === this.room?.sessionId && !this.localAlive) return;
-    const existingAvatar = this.remotePlayers.get(targetSessionId);
-    if (existingAvatar && !existingAvatar.alive && targetSessionId !== this.optimisticBustTargetId) return;
-    const optimisticallyHidden = targetSessionId === this.optimisticBustTargetId;
-    if (optimisticallyHidden) {
-      this.clearOptimisticBust(false);
-      const predictedAvatar = this.remotePlayers.get(targetSessionId);
-      if (predictedAvatar) {
-        predictedAvatar.alive = false;
-        predictedAvatar.root.setEnabled(false);
-        predictedAvatar.collider.setEnabled(false);
-        predictedAvatar.label.style.opacity = "0";
-        predictedAvatar.label.style.display = "none";
-      }
-      return;
-    }
     this.playPopSound();
     if (targetSessionId === this.room?.sessionId) {
       this.localAlive = false;
@@ -2276,21 +2263,9 @@ class PracticeGame {
     });
     window.addEventListener("keyup", (event) => this.input.delete(event.code));
     blendButton.addEventListener("click", () => this.toggleBlend());
-    const activateBustButton = () => {
+    bustButton.addEventListener("click", () => {
       if (this.bustTargetId) this.tryBust();
       else this.tryLift();
-    };
-    // Buttons normally fire click only after the finger or mouse button is
-    // released. Start a Bust on pointer-down so the action feels immediate.
-    bustButton.addEventListener("pointerdown", (event) => {
-      if (event.pointerType === "mouse" && event.button !== 0) return;
-      event.preventDefault();
-      this.lastBustPointerActivationAt = performance.now();
-      activateBustButton();
-    });
-    bustButton.addEventListener("click", () => {
-      if (performance.now() - this.lastBustPointerActivationAt < 500) return;
-      activateBustButton();
     });
     liftButton.addEventListener("click", () => this.tryLift());
     reportButton.addEventListener("click", () => this.tryReport());
@@ -2735,13 +2710,6 @@ class PracticeGame {
         avatar.label.style.display = "none";
         return;
       }
-      if (this.optimisticBustTargetId === sessionId) {
-        avatar.root.setEnabled(false);
-        avatar.collider.setEnabled(false);
-        avatar.label.style.opacity = "0";
-        avatar.label.style.display = "none";
-        return;
-      }
       avatar.root.setEnabled(true);
       avatar.collider.setEnabled(true);
       if (player.moving) {
@@ -2779,7 +2747,7 @@ class PracticeGame {
     for (const [sessionId, avatar] of this.remotePlayers) {
       if (!present.has(sessionId)) this.removeRemotePlayer(sessionId, avatar);
     }
-    arenaSubtitle.textContent = `${Number(players.size ?? 0)} players connected`;
+    arenaSubtitle.textContent = connectedPlayersLabel(Number(players.size ?? 0));
     this.updateFlags(room, dt);
     this.updateRubbish(room);
     this.updateCrimes(room, dt);
@@ -3020,11 +2988,13 @@ class PracticeGame {
     const finalFlagFrenzy = room.state.phase === "game"
       && room.state.flagsRequired - room.state.flagsFound === 1;
     flagsCounter.closest(".status-pill")?.classList.toggle("frenzy", finalFlagFrenzy);
-    const localRoleSeconds = Math.max(0, Math.ceil((roleRevealMinimumUntil - performance.now()) / 1000));
-    if (room.state.phase === "reveal" || localRoleSeconds > 0) {
-      const serverSeconds = Math.max(0, Number(room.state.revealSecondsRemaining ?? 0));
-      const seconds = Math.max(serverSeconds, localRoleSeconds);
-      revealCountdown.textContent = `Round starts in ${seconds}`;
+    if (room.state.phase === "loading") {
+      roundTimer.textContent = "WAIT";
+    } else if (room.state.phase === "reveal") {
+      const seconds = Math.max(0, Number(room.state.revealSecondsRemaining ?? 0));
+      revealCountdown.textContent = roleAcknowledgedForRound
+        ? `Round starts in ${seconds}`
+        : `Read your role carefully. Round starts in ${seconds}.`;
       roundTimer.textContent = this.formatTime(Number(room.state.roundSecondsRemaining ?? room.state.roundSeconds));
     } else if (room.state.phase === "game") {
       roundTimer.textContent = this.formatTime(Number(room.state.roundSecondsRemaining ?? 0));
@@ -3249,57 +3219,8 @@ class PracticeGame {
   }
 
   private tryBust(): void {
-    if (!this.bustTargetId || bustButton.disabled || this.optimisticBustTargetId) return;
-    const targetSessionId = this.bustTargetId;
-    this.beginOptimisticBust(targetSessionId);
-    this.room?.send("bust", targetSessionId);
-  }
-
-  private beginOptimisticBust(targetSessionId: string): void {
-    const avatar = this.remotePlayers.get(targetSessionId);
-    if (!avatar) return;
-    this.optimisticBustTargetId = targetSessionId;
-    bustButton.disabled = true;
-    avatar.root.setEnabled(false);
-    avatar.collider.setEnabled(false);
-    avatar.label.style.opacity = "0";
-    avatar.label.style.display = "none";
-    this.playPopSound();
-    this.createBurstFragments(avatar.root.position.clone());
-    if (this.optimisticBustRollbackTimer !== undefined) {
-      window.clearTimeout(this.optimisticBustRollbackTimer);
-    }
-    this.optimisticBustRollbackTimer = window.setTimeout(() => {
-      this.optimisticBustRollbackTimer = undefined;
-      if (this.optimisticBustTargetId !== targetSessionId) return;
-      const target = this.room ? roomPlayers(this.room)?.get(targetSessionId) : undefined;
-      if (target?.alive === false) return;
-      this.clearOptimisticBust(true);
-    }, 1_500);
-  }
-
-  rejectOptimisticBust(targetSessionId: string): void {
-    if (this.optimisticBustTargetId !== targetSessionId) return;
-    this.clearOptimisticBust(true);
-  }
-
-  private clearOptimisticBust(restoreTarget: boolean): void {
-    if (this.optimisticBustRollbackTimer !== undefined) {
-      window.clearTimeout(this.optimisticBustRollbackTimer);
-      this.optimisticBustRollbackTimer = undefined;
-    }
-    const targetSessionId = this.optimisticBustTargetId;
-    this.optimisticBustTargetId = "";
-    if (!restoreTarget || !targetSessionId) return;
-    const avatar = this.remotePlayers.get(targetSessionId);
-    const target = this.room ? roomPlayers(this.room)?.get(targetSessionId) : undefined;
-    if (!avatar || target?.alive === false) return;
-    avatar.alive = true;
-    avatar.root.scaling.setAll(1);
-    avatar.root.setEnabled(true);
-    avatar.collider.setEnabled(true);
-    avatar.label.style.display = "block";
-    avatar.label.style.opacity = String(avatar.labelOpacity);
+    if (!this.bustTargetId || bustButton.disabled) return;
+    this.room?.send("bust", this.bustTargetId);
   }
 
   private updateLiftControl(): void {
