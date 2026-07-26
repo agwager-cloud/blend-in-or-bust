@@ -91,7 +91,16 @@ export class BlendRoom extends Room<GameState> {
     this.state.roomCode = this.roomCode;
     registerRoom(this.roomCode, this.roomId);
     this.setMetadata({ roomCode: this.roomCode });
-    this.setSimulationInterval(() => this.updateRound());
+    this.setSimulationInterval(() => {
+      try {
+        this.updateRound();
+      } catch (error) {
+        // Keep one bot/pathing fault from disposing the entire room and
+        // disconnecting every browser. Log it for Render while the next tick
+        // continues normally.
+        console.error(`[BlendRoom ${this.roomCode}] simulation tick failed`, error);
+      }
+    });
     this.onMessage("move", (client, message: MoveMessage) => {
       const player = this.state.players.get(client.sessionId);
       if (!player?.alive || player.isLateSpectator || this.state.phase !== "game") return;
@@ -127,62 +136,77 @@ export class BlendRoom extends Room<GameState> {
       });
     });
     this.onMessage("bust", (client, targetSessionId: unknown) => {
-      const requestedTargetId = typeof targetSessionId === "string" ? targetSessionId : "";
-      const reject = (reason: string) => client.send("bust-rejected", {
-        targetSessionId: requestedTargetId,
-        reason,
-      });
-      if (!requestedTargetId || this.state.phase !== "game") {
-        reject("not-active");
-        return;
+      try {
+        const requestedTargetId = typeof targetSessionId === "string" ? targetSessionId : "";
+        const reject = (reason: string) => client.send("bust-rejected", {
+          targetSessionId: requestedTargetId,
+          reason,
+        });
+        if (!requestedTargetId || this.state.phase !== "game") {
+          reject("not-active");
+          return;
+        }
+        const attacker = this.state.players.get(client.sessionId);
+        const target = this.state.players.get(requestedTargetId);
+        if (!attacker?.alive || !target?.alive) {
+          reject("not-alive");
+          return;
+        }
+        if (!attacker.disguise) {
+          reject("not-disguised");
+          return;
+        }
+        if (this.roles.get(client.sessionId) !== "blender" || this.roles.get(requestedTargetId) !== "seeker") {
+          reject("invalid-target");
+          return;
+        }
+        const now = Date.now();
+        const distanceSquared = (attacker.x - target.x) ** 2 + (attacker.z - target.z) ** 2;
+        if (distanceSquared > 3.35 ** 2) {
+          reject("out-of-range");
+          return;
+        }
+        // Claim the one shared Bust slot before changing the victim. Human and
+        // bot Busters both pass through this same atomic server-side gate.
+        if (!this.tryClaimGlobalBust(now)) {
+          reject("cooldown");
+          return;
+        }
+        target.alive = false;
+        target.moving = false;
+        target.disguise = "";
+        target.spectateUnlockAt = now + 15_000;
+        target.spectateTarget = "";
+        if (target.isBot) this.clearBotRuntimeState(requestedTargetId);
+        const crime = new CrimeState();
+        crime.id = `crime-${now}-${requestedTargetId}`;
+        crime.victimName = target.name;
+        crime.x = target.x;
+        crime.z = target.z;
+        this.state.crimes.set(crime.id, crime);
+        // Conceal every Buster before the Busted message changes the victim
+        // into a spectator, preventing even a single rendered frame of the
+        // attacker or another Buster from being visible.
+        if (!target.isBot) this.sendSpectatorConcealment(requestedTargetId);
+        this.broadcast("busted", {
+          targetSessionId: requestedTargetId,
+          attackerSessionId: client.sessionId,
+          targetName: target.name,
+        });
+        this.checkTeamWin();
+      } catch (error) {
+        // A malformed bot/state edge case must never crash the room process.
+        // Reject the action, keep the socket open and leave a useful Render log.
+        console.error(`[BlendRoom ${this.roomCode}] Bust handler failed`, error);
+        try {
+          client.send("bust-rejected", {
+            targetSessionId: typeof targetSessionId === "string" ? targetSessionId : "",
+            reason: "server-error",
+          });
+        } catch {
+          // The socket may already be closing; do not throw a second error.
+        }
       }
-      const attacker = this.state.players.get(client.sessionId);
-      const target = this.state.players.get(requestedTargetId);
-      if (!attacker?.alive || !target?.alive) {
-        reject("not-alive");
-        return;
-      }
-      if (!attacker.disguise) {
-        reject("not-disguised");
-        return;
-      }
-      if (this.roles.get(client.sessionId) !== "blender" || this.roles.get(requestedTargetId) !== "seeker") {
-        reject("invalid-target");
-        return;
-      }
-      const now = Date.now();
-      const distanceSquared = (attacker.x - target.x) ** 2 + (attacker.z - target.z) ** 2;
-      if (distanceSquared > 3.35 ** 2) {
-        reject("out-of-range");
-        return;
-      }
-      // Claim the one shared Bust slot before changing the victim. Human and
-      // bot Busters both pass through this same atomic server-side gate.
-      if (!this.tryClaimGlobalBust(now)) {
-        reject("cooldown");
-        return;
-      }
-      target.alive = false;
-      target.moving = false;
-      target.disguise = "";
-      target.spectateUnlockAt = now + 15_000;
-      target.spectateTarget = "";
-      const crime = new CrimeState();
-      crime.id = `crime-${now}-${requestedTargetId}`;
-      crime.victimName = target.name;
-      crime.x = target.x;
-      crime.z = target.z;
-      this.state.crimes.set(crime.id, crime);
-      // Conceal every Buster before the Busted message changes the victim
-      // into a spectator, preventing even a single rendered frame of the
-      // attacker or another Buster from being visible.
-      if (!target.isBot) this.sendSpectatorConcealment(requestedTargetId);
-      this.broadcast("busted", {
-        targetSessionId: requestedTargetId,
-        attackerSessionId: client.sessionId,
-        targetName: target.name,
-      });
-      this.checkTeamWin();
     });
     this.onMessage("lift", (client, containerId: unknown) => {
       if (typeof containerId !== "string" || this.state.phase !== "game") return;
@@ -407,7 +431,7 @@ export class BlendRoom extends Room<GameState> {
     }
     if (!consented) {
       try {
-        await this.allowReconnection(client, 10);
+        await this.allowReconnection(client, 45);
         return;
       } catch {
         // Reconnection window expired.
@@ -1876,6 +1900,21 @@ export class BlendRoom extends Room<GameState> {
     this.clients
       .find((client) => client.sessionId === sessionId)
       ?.send("spectator-conceal", { sessionIds: hiddenBlenders });
+  }
+
+  private clearBotRuntimeState(sessionId: string): void {
+    this.botTargets.delete(sessionId);
+    this.botRoutes.delete(sessionId);
+    this.botFlagReadyAt.delete(sessionId);
+    this.botNextInspectAt.delete(sessionId);
+    this.botLiftHistory.delete(sessionId);
+    this.botPendingBlend.delete(sessionId);
+    this.botBustTargetSince.delete(sessionId);
+    this.botPursuitLocks.delete(sessionId);
+    this.liftLockedUntil.delete(sessionId);
+    for (const [botId, pursuit] of this.botPursuitLocks) {
+      if (pursuit.targetId === sessionId) this.botPursuitLocks.delete(botId);
+    }
   }
 
   private removeBots(): void {

@@ -1,22 +1,20 @@
-# Blend in or Bust v0.19.24 hotfix
+# Blend in or Bust v0.19.25 hotfix
 
-Changed-files-only stability update.
+Changed-files-only connection and Bust stability update.
 
 ## Fixes
 
-- The lobby button now reads **START MATCH**.
-- A round now stays in an authoritative **loading** phase until every active human has:
-  - finished loading the 3D museum; and
-  - acknowledged their private BUSTER or BLENDER role.
-- The role card remains above the loading screen and sends a private ready confirmation when the player presses **I UNDERSTAND - CONTINUE**.
-- The round timer is not consumed while the museum is loading.
-- Once everyone is ready, all devices receive the same four-second reveal countdown and the gameplay timer starts together.
-- Player movement is enabled when the server enters the gameplay phase.
-- Colyseus heartbeat tolerance is extended for the first Babylon museum build, preventing slow phones, iPads and laptops from being disconnected while their browser is busy loading assets.
-- Existing testing-bot and role settings are preserved.
+- Prevents gameplay code from sending movement or action packets after the WebSocket has started closing.
+- Adds a guarded send path for movement, Bust, Lift, Blend, voting, lobby settings and other room messages.
+- Adds CORS headers to Colyseus matchmaking and reconnect responses used by the itch.io iframe.
+- Reconnects the same player to the same match for up to 30 seconds instead of immediately returning to the start scene.
+- Extends the server reconnection reservation to 45 seconds.
+- Keeps a bot or pathfinding exception from terminating the room simulation and disconnecting every player.
+- Protects the human Bust handler from an unexpected bot-state error.
+- Clears a Busted bot's active navigation, pursuit and interaction state immediately.
+- Shows a clear reconnecting message while the connection is restored.
+- Retains the school-network rule: the browser performs no `/health` request.
 
 ## Deployment
 
-This update changes both client and server files. Push it to GitHub so Render redeploys, then run `FIX_ITCH_UPLOAD.bat` and upload the newest v0.19.24 itch.io ZIP.
-
-No browser `/health` request is added.
+This update changes both client and server files. Push it to GitHub so Render redeploys, then run `FIX_ITCH_UPLOAD.bat` and upload the newest v0.19.25 itch.io ZIP.

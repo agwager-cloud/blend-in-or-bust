@@ -157,6 +157,7 @@ let roleReadySentForRound = false;
 const SERVER_WAKE_WINDOW_MS = 60_000;
 const CONNECTION_ATTEMPT_TIMEOUT_MS = 14_000;
 const CONNECTION_RETRY_DELAY_MS = 1_250;
+const RECONNECT_TIMEOUT_MS = 30_000;
 
 type MultiplayerAction = "host" | "join";
 
@@ -183,6 +184,34 @@ function roomCollection(room: Room<any>, key: "flags" | "rubbish" | "crimes"): a
 
 function isCurrentRoom(room: Room<any>): boolean {
   return activeRoom === room;
+}
+
+function roomSocketIsOpen(room: Room<any> | undefined): boolean {
+  if (!room) return false;
+  const connection = (room as any).connection;
+  if (!connection) return true;
+  try {
+    if (typeof connection.isOpen === "boolean") return connection.isOpen;
+    if (typeof connection.isOpen === "function") return Boolean(connection.isOpen());
+    const transport = connection.transport;
+    const socket = transport?.ws ?? transport?.socket ?? transport;
+    const readyState = socket?.readyState;
+    if (typeof readyState === "number") return readyState === WebSocket.OPEN;
+  } catch {
+    return false;
+  }
+  return true;
+}
+
+function safeRoomSend(room: Room<any> | undefined, type: string, message?: unknown): boolean {
+  if (!roomSocketIsOpen(room)) return false;
+  try {
+    if (message === undefined) room!.send(type);
+    else room!.send(type, message);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // Keep the original network role identifiers for compatibility, while every
@@ -679,13 +708,27 @@ function bindRoom(room: Room<any>, client: Client): void {
     reconnecting = true;
     connectionStatus.textContent = "RECONNECTING";
     connectionStatus.classList.remove("online");
+    showSceneLoading("Connection interrupted. Reconnecting to the same match...");
     try {
-      const restored = await client.reconnect(room.reconnectionToken);
+      const restored = await Promise.race([
+        client.reconnect(room.reconnectionToken),
+        new Promise<never>((_, reject) => window.setTimeout(
+          () => reject(new Error("Reconnect timed out.")),
+          RECONNECT_TIMEOUT_MS,
+        )),
+      ]);
+      if (activeRoom !== room) {
+        void restored.leave(true);
+        return;
+      }
       activeRoom = restored;
       game?.setRoom(restored);
       bindRoom(restored, client);
+      connectionStatus.textContent = "CONNECTED";
+      connectionStatus.classList.add("online");
+      hideSceneLoading();
     } catch {
-      leaveRoom(false, "Connection lost. Please join the room again.");
+      if (activeRoom === room) leaveRoom(false, "Connection lost. Please join the room again.");
     } finally {
       reconnecting = false;
     }
@@ -713,7 +756,7 @@ function updateLobby(): void {
       removeButton.type = "button";
       removeButton.textContent = "REMOVE";
       removeButton.setAttribute("aria-label", `Remove ${player.name} from the lobby`);
-      removeButton.addEventListener("click", () => room.send("kick-player", sessionId));
+      removeButton.addEventListener("click", () => safeRoomSend(room, "kick-player", sessionId));
       row.append(removeButton);
     }
     playerList.append(row);
@@ -865,7 +908,7 @@ function updateMeetingUi(room: Room<any>): void {
 function submitVote(targetId: string): void {
   if (!activeRoom || submittedVote) return;
   submittedVote = targetId;
-  activeRoom.send("vote", targetId);
+  safeRoomSend(activeRoom, "vote", targetId);
   updateMeetingUi(activeRoom);
 }
 
@@ -875,7 +918,7 @@ roleContinueButton.addEventListener("click", () => {
   roleAcknowledgedForRound = true;
   if (!roleReadySentForRound && activeRoom) {
     roleReadySentForRound = true;
-    activeRoom.send("role-ready");
+    safeRoomSend(activeRoom, "role-ready");
   }
   roleReveal.classList.add("hidden");
   roleReveal.classList.remove("role-reveal-priority");
@@ -973,12 +1016,12 @@ async function enterMultiplayerArena(room: Room<any>, generation: number): Promi
   }
   const local = roomPlayers(room)?.get(room.sessionId);
   if (local?.isLateSpectator) {
-    room.send("spectator-ready");
+    safeRoomSend(room, "spectator-ready");
   } else {
     // Tell the server only after this device has finished building the museum.
     // The synchronized role reveal begins after every active human is ready,
     // so a slow first load can no longer hide the player's role card.
-    room.send("round-ready");
+    safeRoomSend(room, "round-ready");
   }
   loadedGame.resume();
   updateRoleReveal();
@@ -1042,12 +1085,12 @@ const currentLobbySettings = () => ({
   botsEnabled: botsEnabledSelect.value !== "off",
   balancedHumanRoles: botsEnabledSelect.value === "balanced",
 });
-const sendSettings = () => activeRoom?.send("settings", currentLobbySettings());
+const sendSettings = () => safeRoomSend(activeRoom, "settings", currentLobbySettings());
 roundTimeSelect.addEventListener("change", sendSettings);
 blenderCountSelect.addEventListener("change", sendSettings);
 botsEnabledSelect.addEventListener("change", sendSettings);
-startButton.addEventListener("click", () => activeRoom?.send("start", currentLobbySettings()));
-returnLobbyButton.addEventListener("click", () => activeRoom?.send("return-lobby"));
+startButton.addEventListener("click", () => safeRoomSend(activeRoom, "start", currentLobbySettings()));
+returnLobbyButton.addEventListener("click", () => safeRoomSend(activeRoom, "return-lobby"));
 document.querySelector("#leave-button")!.addEventListener("click", () => leaveRoom(true));
 
 function leaveRoom(consented: boolean, message = "You left the room."): void {
@@ -2658,20 +2701,19 @@ class PracticeGame {
     const localPlayer = players.get(room.sessionId);
     if (localPlayer?.isLateSpectator && !this.localLateSpectator) {
       this.enterLateSpectatorMode();
-      room.send("spectator-ready");
+      safeRoomSend(room, "spectator-ready");
     } else if (this.localAlive && localPlayer?.alive === false) {
       this.handleBust(room.sessionId);
     }
     if (this.localAlive && room.state.phase === "game"
       && now >= this.movementSuppressedUntil && now - this.lastNetworkSend >= 66) {
-      room.send("move", {
+      if (safeRoomSend(room, "move", {
         x: this.playerRoot.position.x,
         y: this.playerRoot.position.y,
         z: this.playerRoot.position.z,
         rotation: this.playerRoot.rotation.y,
         moving,
-      });
-      this.lastNetworkSend = now;
+      })) this.lastNetworkSend = now;
     }
 
     const present = new Set<string>();
@@ -3220,7 +3262,7 @@ class PracticeGame {
 
   private tryBust(): void {
     if (!this.bustTargetId || bustButton.disabled) return;
-    this.room?.send("bust", this.bustTargetId);
+    safeRoomSend(this.room, "bust", this.bustTargetId);
   }
 
   private updateLiftControl(): void {
@@ -3274,7 +3316,7 @@ class PracticeGame {
     activeButton.disabled = true;
     blendButton.disabled = true;
     this.animateLift(this.liftTargetId);
-    this.room?.send("lift", this.liftTargetId);
+    safeRoomSend(this.room, "lift", this.liftTargetId);
   }
 
   private liftNodesFor(containerId: string): TransformNode[] {
@@ -3381,7 +3423,7 @@ class PracticeGame {
 
   private tryReport(): void {
     if (!this.reportTargetId || reportButton.disabled) return;
-    this.room?.send("report", this.reportTargetId);
+    safeRoomSend(this.room, "report", this.reportTargetId);
   }
 
   private animatePop(root: TransformNode, finished: () => void): void {
@@ -3667,7 +3709,7 @@ class PracticeGame {
     this.playerVisor.setEnabled(false);
     this.disguised = true;
     this.currentDisguiseName = source.name;
-    this.room?.send("disguise", this.currentDisguiseName);
+    safeRoomSend(this.room, "disguise", this.currentDisguiseName);
     this.lastBlendAt = performance.now();
     const halfHeight = clone.getBoundingInfo().boundingBox.extendSizeWorld.y;
     this.cameraTargetHeight = Math.max(0.7, Math.min(2.2, halfHeight * 1.15));
@@ -3680,7 +3722,7 @@ class PracticeGame {
     this.playerVisor.setEnabled(true);
     this.disguised = false;
     this.currentDisguiseName = "";
-    this.room?.send("disguise", "");
+    safeRoomSend(this.room, "disguise", "");
     this.cameraTargetHeight = 1.35;
     this.lastBlendAt = performance.now();
   }
