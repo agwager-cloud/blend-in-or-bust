@@ -1,4 +1,4 @@
-## Version 0.19.19 - Encoding-Safe UI and Museum Loading Screen
+## Version 0.19.20 - Encoding-Safe UI and Museum Loading Screen
 
 - Replaced every player-facing emoji, bullet, special dash and arrow with ASCII-safe text or HTML entities so itch.io cannot display broken character sequences.
 - The sound control now shows MUSIC ON / MUSIC OFF outside gameplay and ON / OFF inside the compact game HUD.
@@ -18,7 +18,7 @@
 
 ## Emergency itch.io repair
 
-To create the corrected itch.io upload, double-click `FIX_ITCH_UPLOAD.bat`. It rebuilds the current client source, validates all generated files and creates `release/Blend-in-or-Bust-v0.19.19-itch.zip`. No new dependency installation is required.
+To create the corrected itch.io upload, double-click `FIX_ITCH_UPLOAD.bat`. It rebuilds the current client source, validates all generated files and creates `release/Blend-in-or-Bust-v0.19.20-itch.zip`. No new dependency installation is required.
 
 
 ## v0.19.16 itch.io loading fix
@@ -996,3 +996,12 @@ The server health check is available at `http://localhost:2567/health`.
 ## v0.19.16 itch ZIP validation fix
 
 The existing-dist repair tool now normalises Windows ZIP path separators before validating the generated `assets` folder. This prevents a valid itch.io ZIP from being incorrectly rejected as missing assets.
+
+## v0.19.20 stability hotfix
+
+- Bundles `client/public/assets/title-background.jpg` and resolves it from the itch.io document URL.
+- Prevents stale Colyseus callbacks from reopening the arena after Back/Leave.
+- Uses one shared museum-load promise and keeps the loading overlay visible while players and testing bots synchronise.
+- Guards all client MapSchema access until the related state collection exists.
+- Sends the selected bot/role/time settings atomically with Start so testing bots cannot be skipped by a message-order race.
+- itch.io packaging now fails if the title background is absent.

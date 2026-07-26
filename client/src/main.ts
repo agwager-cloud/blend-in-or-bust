@@ -28,9 +28,13 @@ import "./style.css";
 const assetUrl = (path: string): string =>
   `${import.meta.env.BASE_URL}${path.replace(/^\/+/, "")}`;
 
+const titleBackgroundUrl = new URL(
+  assetUrl("assets/title-background.jpg"),
+  document.baseURI,
+).href;
 document.documentElement.style.setProperty(
   "--title-background-image",
-  `url("${assetUrl("assets/title-background.jpg")}")`,
+  `url("${titleBackgroundUrl}")`,
 );
 
 function revealAppWhenStyled(attempt = 0): void {
@@ -139,6 +143,10 @@ let submittedVote = "";
 let pendingSpectatorConcealment: string[] = [];
 let connectionInProgress = false;
 let connectionRequestId = 0;
+let arenaEntryGeneration = 0;
+let arenaEntryPromise: Promise<void> | undefined;
+let arenaEntryRoom: Room<any> | undefined;
+let museumLoadPromise: Promise<PracticeGame> | undefined;
 
 const SERVER_WAKE_WINDOW_MS = 60_000;
 const CONNECTION_ATTEMPT_TIMEOUT_MS = 14_000;
@@ -149,6 +157,26 @@ type MultiplayerAction = "host" | "join";
 interface OpenedMultiplayerRoom {
   client: Client;
   room: Room<any>;
+}
+
+function schemaMap(value: unknown): any | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const candidate = value as { get?: unknown; forEach?: unknown };
+  return typeof candidate.get === "function" && typeof candidate.forEach === "function"
+    ? value as any
+    : undefined;
+}
+
+function roomPlayers(room: Room<any> | undefined): any | undefined {
+  return schemaMap(room?.state?.players);
+}
+
+function roomCollection(room: Room<any>, key: "flags" | "rubbish" | "crimes"): any | undefined {
+  return schemaMap(room?.state?.[key]);
+}
+
+function isCurrentRoom(room: Room<any>): boolean {
+  return activeRoom === room;
 }
 
 // Keep the original network role identifiers for compatibility, while every
@@ -456,6 +484,7 @@ async function connectMultiplayer(action: MultiplayerAction): Promise<void> {
           return;
         }
 
+        arenaEntryGeneration += 1;
         activeRoom = opened.room;
         bindRoom(opened.room, opened.client);
         titleScreen.classList.add("hidden");
@@ -463,7 +492,7 @@ async function connectMultiplayer(action: MultiplayerAction): Promise<void> {
         updateLobby();
         if (["reveal", "game", "discussion", "voting", "verdict", "results"]
           .includes(String(opened.room.state.phase))) {
-          void enterMultiplayerArena(opened.room);
+          requestEnterMultiplayerArena(opened.room);
         }
         return;
       } catch (error) {
@@ -498,6 +527,7 @@ function bindRoom(room: Room<any>, client: Client): void {
   connectionStatus.textContent = "CONNECTED";
   connectionStatus.classList.add("online");
   room.onMessage("room-info", ({ roomCode }: { roomCode: string }) => {
+    if (!isCurrentRoom(room)) return;
     lobbyCode.textContent = roomCode;
   });
   room.onMessage("role", ({
@@ -507,6 +537,7 @@ function bindRoom(room: Room<any>, client: Client): void {
     role: "seeker" | "blender";
     blenderTeammates?: string[];
   }) => {
+    if (!isCurrentRoom(room)) return;
     localRole = role;
     blenderTeammates = new Set(teammateIds);
     game?.resetForRound();
@@ -519,6 +550,7 @@ function bindRoom(room: Room<any>, client: Client): void {
     sessionId: string;
     disguise: string;
   }) => {
+    if (!isCurrentRoom(room)) return;
     game?.syncRemoteDisguise(sessionId, disguise);
   });
   room.onMessage("busted", ({
@@ -528,17 +560,21 @@ function bindRoom(room: Room<any>, client: Client): void {
     targetSessionId: string;
     attackerSessionId: string;
   }) => {
+    if (!isCurrentRoom(room)) return;
     game?.handleBust(targetSessionId);
     if (attackerSessionId === room.sessionId) game?.confirmBust();
   });
   room.onMessage("ejected", ({ targetSessionId }: { targetSessionId: string }) => {
+    if (!isCurrentRoom(room)) return;
     game?.handleBust(targetSessionId);
   });
   room.onMessage("spectator-conceal", ({ sessionIds }: { sessionIds: string[] }) => {
+    if (!isCurrentRoom(room)) return;
     pendingSpectatorConcealment = [...sessionIds];
     game?.setSpectatorConcealment(sessionIds);
   });
   room.onMessage("late-spectator", () => {
+    if (!isCurrentRoom(room)) return;
     formMessage.textContent = "Joined the active round as a security-camera spectator.";
   });
   room.onMessage("reset-positions", ({
@@ -546,12 +582,15 @@ function bindRoom(room: Room<any>, client: Client): void {
   }: {
     positions: Record<string, { x: number; y: number; z: number; rotation: number }>;
   }) => {
+    if (!isCurrentRoom(room)) return;
     game?.resetRoundPositions(positions);
   });
   room.onMessage("bust-cooldown", ({ durationMs }: { durationMs: number }) => {
+    if (!isCurrentRoom(room)) return;
     game?.setGlobalBustCooldown(durationMs);
   });
   room.onMessage("flag-found", ({ by }: { by: string }) => {
+    if (!isCurrentRoom(room)) return;
     flagsCounter.animate(
       [{ transform: "scale(1)" }, { transform: "scale(1.35)", color: "#fff" }, { transform: "scale(1)" }],
       { duration: 500 },
@@ -559,6 +598,7 @@ function bindRoom(room: Room<any>, client: Client): void {
     game?.showObjectiveNotice(`${by} found a flag!`, 4200);
   });
   room.onMessage("rubbish-collected", ({ id, by }: { id: string; by: string }) => {
+    if (!isCurrentRoom(room)) return;
     rubbishCounter.animate(
       [{ transform: "scale(1)" }, { transform: "scale(1.28)", color: "#fff" }, { transform: "scale(1)" }],
       { duration: 420 },
@@ -567,6 +607,7 @@ function bindRoom(room: Room<any>, client: Client): void {
     game?.showObjectiveNotice(`${by} cleaned up some rubbish!`, 3200);
   });
   room.onMessage("bot-lift", ({ containerId }: { containerId: string }) => {
+    if (!isCurrentRoom(room)) return;
     game?.handleBotLift(containerId);
   });
   room.onMessage("lifted", ({
@@ -578,6 +619,7 @@ function bindRoom(room: Room<any>, client: Client): void {
     flagId: string;
     collected?: boolean;
   }) => {
+    if (!isCurrentRoom(room)) return;
     game?.handleLifted(containerId, flagId, Boolean(collected));
     game?.showObjectiveNotice(
       collected
@@ -589,16 +631,18 @@ function bindRoom(room: Room<any>, client: Client): void {
     );
   });
   room.onStateChange(() => {
+    if (!isCurrentRoom(room)) return;
     updateLobby();
     const matchInProgress = ["reveal", "game", "discussion", "voting", "verdict", "results"]
-      .includes(String(room.state.phase));
+      .includes(String(room.state?.phase));
     if (matchInProgress && gameScreen.classList.contains("hidden")) {
-      void enterMultiplayerArena(room);
+      requestEnterMultiplayerArena(room);
     }
     updateMatchScreens(room);
     updateMeetingUi(room);
   });
   room.onLeave(async (code) => {
+    if (activeRoom !== room) return;
     if (code === 4001) {
       // A host removal requires a new name before this browser can rejoin the
       // same room. Clear the saved value so the player cannot accidentally
@@ -627,38 +671,41 @@ function bindRoom(room: Room<any>, client: Client): void {
 }
 
 function updateLobby(): void {
-  if (!activeRoom?.state) return;
-  lobbyCode.textContent = activeRoom.state.roomCode || lobbyCode.textContent;
+  const room = activeRoom;
+  if (!room?.state) return;
+  const players = roomPlayers(room);
+  if (!players) return;
+  lobbyCode.textContent = room.state.roomCode || lobbyCode.textContent;
   playerList.replaceChildren();
-  const localIsHost = Boolean(activeRoom.state.players.get(activeRoom.sessionId)?.isHost);
-  activeRoom.state.players.forEach((player: any, sessionId: string) => {
+  const localIsHost = Boolean(players.get(room.sessionId)?.isHost);
+  players.forEach((player: any, sessionId: string) => {
     const row = document.createElement("div");
     row.className = "lobby-player";
     row.innerHTML = `<span class="player-dot"></span><span class="lobby-player-name"></span>${player.isHost ? '<span class="host-badge">HOST</span>' : ""}`;
     row.querySelector<HTMLElement>(".lobby-player-name")!.textContent = player.isLateSpectator
       ? `${player.name} | SPECTATOR`
       : player.name;
-    if (localIsHost && sessionId !== activeRoom?.sessionId && !player.isBot) {
+    if (localIsHost && sessionId !== room.sessionId && !player.isBot) {
       const removeButton = document.createElement("button");
       removeButton.className = "remove-player";
       removeButton.type = "button";
       removeButton.textContent = "REMOVE";
       removeButton.setAttribute("aria-label", `Remove ${player.name} from the lobby`);
-      removeButton.addEventListener("click", () => activeRoom?.send("kick-player", sessionId));
+      removeButton.addEventListener("click", () => room.send("kick-player", sessionId));
       row.append(removeButton);
     }
     playerList.append(row);
   });
   startButton.classList.toggle("hidden", !localIsHost);
   hostSettings.classList.toggle("hidden", !localIsHost);
-  roundTimeSelect.value = String(activeRoom.state.roundSeconds);
-  blenderCountSelect.value = String(activeRoom.state.blenderOverride);
-  botsEnabledSelect.value = !activeRoom.state.botsEnabled
+  roundTimeSelect.value = String(room.state.roundSeconds);
+  blenderCountSelect.value = String(room.state.blenderOverride);
+  botsEnabledSelect.value = !room.state.botsEnabled
     ? "off"
-    : activeRoom.state.balancedHumanRoles ? "balanced" : "on";
+    : room.state.balancedHumanRoles ? "balanced" : "on";
   let lobbyParticipants = 0;
   let lobbySpectators = 0;
-  activeRoom.state.players.forEach((player: any) => {
+  players.forEach((player: any) => {
     if (player.isBot) return;
     if (player.isLateSpectator) lobbySpectators += 1;
     else lobbyParticipants += 1;
@@ -669,8 +716,8 @@ function updateLobby(): void {
   lobbyMessage.textContent = lobbyParticipants >= 24
     ? "24 / 24 participants - ROOM FULL - additional students should host a new room."
     : lobbySpectators > 0
-      ? `${lobbyParticipants} / 24 participants - ${lobbySpectators} spectators - Share code ${activeRoom.state.roomCode}`
-      : `${lobbyParticipants} / 24 participants - Share code ${activeRoom.state.roomCode}`;
+      ? `${lobbyParticipants} / 24 participants - ${lobbySpectators} spectators - Share code ${room.state.roomCode}`
+      : `${lobbyParticipants} / 24 participants - Share code ${room.state.roomCode}`;
 }
 
 function updateRoleReveal(): void {
@@ -683,8 +730,11 @@ function updateRoleReveal(): void {
 }
 
 function updateMatchScreens(room: Room<any>): void {
-  const phase = room.state.phase;
-  const local = room.state.players.get(room.sessionId);
+  if (!isCurrentRoom(room)) return;
+  const players = roomPlayers(room);
+  if (!players) return;
+  const phase = String(room.state?.phase ?? "lobby");
+  const local = players.get(room.sessionId);
   const lateSpectator = Boolean(local?.isLateSpectator);
   roleReveal.classList.toggle("hidden", phase !== "reveal" || lateSpectator);
   resultsOverlay.classList.toggle("hidden", phase !== "results");
@@ -693,7 +743,7 @@ function updateMatchScreens(room: Room<any>): void {
   rubbishCounter.textContent = `${rubbishLeft} RUBBISH LEFT`;
   let activePlayers = 0;
   let bustedPlayers = 0;
-  room.state.players.forEach((player: any) => {
+  players.forEach((player: any) => {
     if (player.isLateSpectator) return;
     if (player.alive) activePlayers += 1;
     else bustedPlayers += 1;
@@ -727,18 +777,21 @@ function updateMatchScreens(room: Room<any>): void {
 }
 
 function updateMeetingUi(room: Room<any>): void {
-  const phase = room.state.phase;
+  if (!isCurrentRoom(room)) return;
+  const players = roomPlayers(room);
+  if (!players) return;
+  const phase = String(room.state?.phase ?? "lobby");
   const meetingActive = ["discussion", "voting", "verdict"].includes(phase);
   backgroundMusic.setMeetingActive(meetingActive);
   meetingOverlay.classList.toggle("hidden", !meetingActive);
   if (!meetingActive) return;
-  const local = room.state.players.get(room.sessionId);
+  const local = players.get(room.sessionId);
   if (renderedMeetingNumber !== room.state.meetingNumber) {
     renderedMeetingNumber = room.state.meetingNumber;
     submittedVote = "";
   }
   voteGrid.replaceChildren();
-  room.state.players.forEach((player: any, sessionId: string) => {
+  players.forEach((player: any, sessionId: string) => {
     const button = document.createElement("button");
     button.className = "vote-card";
     const displayName = player.isBot ? `${player.name} | BOT` : player.name;
@@ -798,83 +851,164 @@ function hideSceneLoading(): void {
 }
 
 async function ensureMuseumLoaded(): Promise<PracticeGame> {
-  if (game) {
-    hideSceneLoading();
-    return game;
-  }
+  if (game) return game;
+  if (museumLoadPromise) return museumLoadPromise;
+
   showSceneLoading("Building the 25 museum rooms...");
   const nextGame = new PracticeGame(canvas, playerLabel);
-  try {
-    await nextGame.start((message) => showSceneLoading(message));
-    game = nextGame;
-    hideSceneLoading();
-    return nextGame;
-  } catch (error) {
-    console.error("Museum loading failed", error);
-    sceneLoadingMessage.textContent = "The museum could not finish loading. Refresh the itch.io page and try again.";
-    throw error;
+  museumLoadPromise = (async () => {
+    try {
+      await nextGame.start((message) => showSceneLoading(message));
+      game = nextGame;
+      return nextGame;
+    } catch (error) {
+      console.error("Museum loading failed", error);
+      sceneLoadingMessage.textContent = "The museum could not finish loading. Refresh the itch.io page and try again.";
+      throw error;
+    } finally {
+      museumLoadPromise = undefined;
+    }
+  })();
+  return museumLoadPromise;
+}
+
+async function waitForRoundState(room: Room<any>, generation: number): Promise<void> {
+  const deadline = performance.now() + 6_000;
+  while (performance.now() < deadline) {
+    if (generation !== arenaEntryGeneration || !isCurrentRoom(room)) return;
+    const players = roomPlayers(room);
+    if (players) {
+      let humanCount = 0;
+      let botCount = 0;
+      players.forEach((player: any) => {
+        if (player?.isLateSpectator) return;
+        if (player?.isBot) botCount += 1;
+        else humanCount += 1;
+      });
+      const expectedBots = room.state?.botsEnabled
+        ? Math.min(8, Math.max(0, 24 - humanCount))
+        : 0;
+      if (botCount >= expectedBots) return;
+      showSceneLoading(`Syncing players and testing bots... ${botCount} of ${expectedBots}`);
+    } else {
+      showSceneLoading("Syncing multiplayer room...");
+    }
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 100));
   }
 }
 
-async function enterMultiplayerArena(room: Room<any>): Promise<void> {
+async function enterMultiplayerArena(room: Room<any>, generation: number): Promise<void> {
+  if (!isCurrentRoom(room) || generation !== arenaEntryGeneration) return;
   lobbyScreen.classList.add("hidden");
   titleScreen.classList.add("hidden");
   gameScreen.classList.remove("hidden");
-  arenaTitle.textContent = `ROOM ${room.state.roomCode}`;
-  arenaSubtitle.textContent = `${room.state.players.size} players connected`;
+  showSceneLoading("Loading the museum...");
+  arenaTitle.textContent = `ROOM ${String(room.state?.roomCode ?? "")}`;
+  const playersBeforeLoad = roomPlayers(room);
+  arenaSubtitle.textContent = `${Number(playersBeforeLoad?.size ?? 0)} players connected`;
   playerLabel.textContent = nameInput.value.trim().toUpperCase();
+
   const loadedGame = await ensureMuseumLoaded();
+  if (!isCurrentRoom(room) || generation !== arenaEntryGeneration) {
+    loadedGame.pause();
+    hideSceneLoading();
+    return;
+  }
+
+  await waitForRoundState(room, generation);
+  if (!isCurrentRoom(room) || generation !== arenaEntryGeneration) {
+    loadedGame.pause();
+    hideSceneLoading();
+    return;
+  }
+
   loadedGame.setRoom(room);
   if (pendingSpectatorConcealment.length > 0) {
     loadedGame.setSpectatorConcealment(pendingSpectatorConcealment);
   }
-  const local = room.state.players.get(room.sessionId);
+  const local = roomPlayers(room)?.get(room.sessionId);
   if (local?.isLateSpectator) room.send("spectator-ready");
   loadedGame.resume();
   updateRoleReveal();
   updateMatchScreens(room);
+  window.requestAnimationFrame(() => hideSceneLoading());
+}
+
+function requestEnterMultiplayerArena(room: Room<any>): void {
+  if (!isCurrentRoom(room)) return;
+  if (arenaEntryPromise && arenaEntryRoom === room) return;
+  const generation = arenaEntryGeneration;
+  const entryPromise = enterMultiplayerArena(room, generation)
+    .catch((error) => {
+      if (generation === arenaEntryGeneration && isCurrentRoom(room)) {
+        console.error("Arena entry failed", error);
+        sceneLoadingMessage.textContent = "The game scene could not finish loading. Return to the lobby and try again.";
+      }
+    })
+    .finally(() => {
+      if (arenaEntryPromise === entryPromise) {
+        arenaEntryPromise = undefined;
+        arenaEntryRoom = undefined;
+      }
+    });
+  arenaEntryRoom = room;
+  arenaEntryPromise = entryPromise;
 }
 
 async function enterPractice(): Promise<void> {
   const name = validName();
   if (!name) return;
+  const generation = ++arenaEntryGeneration;
   titleScreen.classList.add("hidden");
   lobbyScreen.classList.add("hidden");
   gameScreen.classList.remove("hidden");
+  showSceneLoading("Loading the museum...");
   arenaTitle.textContent = "MIDNIGHT MUSEUM";
   arenaSubtitle.textContent = "Local museum exploration";
   playerLabel.textContent = name.toUpperCase();
   const loadedGame = await ensureMuseumLoaded();
+  if (generation !== arenaEntryGeneration || activeRoom) {
+    loadedGame.pause();
+    hideSceneLoading();
+    return;
+  }
+  loadedGame.setRoom(undefined);
   loadedGame.resume();
+  window.requestAnimationFrame(() => hideSceneLoading());
 }
 
 hostButton.addEventListener("click", () => void connectMultiplayer("host"));
 joinButton.addEventListener("click", () => void connectMultiplayer("join"));
 practiceButton.addEventListener("click", enterPractice);
 document.querySelector("#back-button")!.addEventListener("click", () => {
+  arenaEntryGeneration += 1;
+  hideSceneLoading();
   if (activeRoom) {
     leaveRoom(true);
     return;
   }
   game?.pause();
   gameScreen.classList.add("hidden");
+  lobbyScreen.classList.add("hidden");
   titleScreen.classList.remove("hidden");
 });
-const sendSettings = () => activeRoom?.send("settings", {
+const currentLobbySettings = () => ({
   roundSeconds: Number(roundTimeSelect.value),
   blenderOverride: Number(blenderCountSelect.value),
   botsEnabled: botsEnabledSelect.value !== "off",
   balancedHumanRoles: botsEnabledSelect.value === "balanced",
 });
+const sendSettings = () => activeRoom?.send("settings", currentLobbySettings());
 roundTimeSelect.addEventListener("change", sendSettings);
 blenderCountSelect.addEventListener("change", sendSettings);
 botsEnabledSelect.addEventListener("change", sendSettings);
-startButton.addEventListener("click", sendSettings);
-startButton.addEventListener("click", () => activeRoom?.send("start"));
+startButton.addEventListener("click", () => activeRoom?.send("start", currentLobbySettings()));
 returnLobbyButton.addEventListener("click", () => activeRoom?.send("return-lobby"));
 document.querySelector("#leave-button")!.addEventListener("click", () => leaveRoom(true));
 
 function leaveRoom(consented: boolean, message = "You left the room."): void {
+  arenaEntryGeneration += 1;
+  hideSceneLoading();
   const room = activeRoom;
   activeRoom = undefined;
   if (consented) void room?.leave(true);
@@ -1090,7 +1224,7 @@ class PracticeGame {
     this.crimeRoomAudio.currentTime = 0;
     if (!room || !this.playerCollider) return;
     this.resetForRound();
-    const local = room.state.players.get(room.sessionId);
+    const local = roomPlayers(room)?.get(room.sessionId);
     if (local) {
       this.playerCollider.position.set(local.x, 1.12, local.z);
       this.playerRoot.position.set(local.x, 0, local.z);
@@ -1210,7 +1344,7 @@ class PracticeGame {
     const target = this.liftNodesFor(containerId)[0];
     if (!target) return;
     if (flagId) {
-      const flag = this.room?.state.flags?.get(flagId);
+      const flag = this.room ? roomCollection(this.room, "flags")?.get(flagId) : undefined;
       const stablePosition = flag
         ? this.flagPreviewPosition(containerId, Number(flag.x), Number(flag.z))
         : target.getAbsolutePosition();
@@ -2470,8 +2604,10 @@ class PracticeGame {
   private updateMultiplayer(dt: number, moving: boolean): void {
     const room = this.room;
     if (!room?.state) return;
+    const players = roomPlayers(room);
+    if (!players) return;
     const now = performance.now();
-    const localPlayer = room.state.players.get(room.sessionId);
+    const localPlayer = players.get(room.sessionId);
     if (localPlayer?.isLateSpectator && !this.localLateSpectator) {
       this.enterLateSpectatorMode();
       room.send("spectator-ready");
@@ -2491,7 +2627,7 @@ class PracticeGame {
     }
 
     const present = new Set<string>();
-    room.state.players.forEach((player: any, sessionId: string) => {
+    players.forEach((player: any, sessionId: string) => {
       if (sessionId === room.sessionId || player.isLateSpectator) return;
       present.add(sessionId);
       let avatar = this.remotePlayers.get(sessionId);
@@ -2563,7 +2699,7 @@ class PracticeGame {
     for (const [sessionId, avatar] of this.remotePlayers) {
       if (!present.has(sessionId)) this.removeRemotePlayer(sessionId, avatar);
     }
-    arenaSubtitle.textContent = `${room.state.players.size} players connected`;
+    arenaSubtitle.textContent = `${Number(players.size ?? 0)} players connected`;
     this.updateFlags(room, dt);
     this.updateRubbish(room);
     this.updateCrimes(room, dt);
@@ -2574,7 +2710,7 @@ class PracticeGame {
   }
 
   private updateSpectatorState(room: Room<any>): void {
-    const local = room.state?.players?.get(room.sessionId);
+    const local = roomPlayers(room)?.get(room.sessionId);
     if (!local || local.alive) {
       this.spectatorPrivacyActive = false;
       privacyBlackout.classList.add("hidden");
@@ -2607,7 +2743,9 @@ class PracticeGame {
 
   private updateFlags(room: Room<any>, dt: number): void {
     const present = new Set<string>();
-    room.state.flags.forEach((flag: any, id: string) => {
+    const flags = roomCollection(room, "flags");
+    if (!flags) return;
+    flags.forEach((flag: any, id: string) => {
       if (flag.found || !flag.revealed) return;
       present.add(id);
       let root = this.flagMeshes.get(id);
@@ -2630,7 +2768,9 @@ class PracticeGame {
 
   private updateRubbish(room: Room<any>): void {
     const present = new Set<string>();
-    room.state.rubbish?.forEach((item: any, id: string) => {
+    const rubbish = roomCollection(room, "rubbish");
+    if (!rubbish) return;
+    rubbish.forEach((item: any, id: string) => {
       if (item.collected) {
         this.rubbishCollectedOverrides.delete(id);
         return;
@@ -2719,7 +2859,9 @@ class PracticeGame {
 
   private updateCrimes(room: Room<any>, dt: number): void {
     const present = new Set<string>();
-    room.state.crimes.forEach((crime: any, id: string) => {
+    const crimes = roomCollection(room, "crimes");
+    if (!crimes) return;
+    crimes.forEach((crime: any, id: string) => {
       present.add(id);
       let root = this.crimeMeshes.get(id);
       if (!root) {
@@ -2747,7 +2889,9 @@ class PracticeGame {
     if (!this.localAlive || room.state.phase !== "game") return;
 
     let roomHasCrime = false;
-    room.state.crimes.forEach((crime: any) => {
+    const crimes = roomCollection(room, "crimes");
+    if (!crimes) return;
+    crimes.forEach((crime: any) => {
       if (this.roomNameAt(crime.x, crime.z) === currentRoom) roomHasCrime = true;
     });
     if (!roomHasCrime) return;
@@ -2811,7 +2955,7 @@ class PracticeGame {
 
   private updateFlagSignal(room: Room<any>): void {
     if (performance.now() < this.objectiveNoticeUntil) return;
-    const local = room.state.players.get(room.sessionId);
+    const local = roomPlayers(room)?.get(room.sessionId);
     const rubbishLeft = Math.max(
       0,
       Number(room.state.rubbishRequired ?? 0) - Number(room.state.rubbishCollected ?? 0),
@@ -2837,7 +2981,9 @@ class PracticeGame {
 
     const playerRoom = this.roomIndexAt(this.playerRoot.position.x, this.playerRoot.position.z);
     let nearestDistance = Number.POSITIVE_INFINITY;
-    room.state.flags.forEach((flag: any) => {
+    const flags = roomCollection(room, "flags");
+    if (!flags) return;
+    flags.forEach((flag: any) => {
       if (flag.found) return;
       if (this.roomIndexAt(Number(flag.x), Number(flag.z)) !== playerRoom) return;
       nearestDistance = Math.min(
@@ -2990,8 +3136,10 @@ class PracticeGame {
     bustButton.classList.toggle("hidden", !visible);
     this.bustTargetId = "";
     if (!visible || !room) return;
+    const players = roomPlayers(room);
+    if (!players) return;
     let nearestDistance = 3.35;
-    room.state.players.forEach((player: any, sessionId: string) => {
+    players.forEach((player: any, sessionId: string) => {
       if (sessionId === room.sessionId || blenderTeammates.has(sessionId) || !player.alive) return;
       const distance = Math.hypot(
         this.playerRoot.position.x - player.x,
@@ -3043,7 +3191,8 @@ class PracticeGame {
       nearestDistance = distance;
       this.liftTargetId = target.name;
     }
-    room?.state.players.forEach((player: any, sessionId: string) => {
+    const players = room ? roomPlayers(room) : undefined;
+    players?.forEach((player: any, sessionId: string) => {
       if (sessionId === room.sessionId || !player.alive
         || (player.moving && !player.isBot) || !player.disguise) return;
       const avatar = this.remotePlayers.get(sessionId);
@@ -3161,9 +3310,11 @@ class PracticeGame {
     reportButton.classList.toggle("hidden", !eligible);
     this.reportTargetId = "";
     if (!eligible || !room) return;
+    const crimes = roomCollection(room, "crimes");
+    if (!crimes) return;
     let nearestDistance = 2.8;
     let victimName = "";
-    room.state.crimes.forEach((crime: any, id: string) => {
+    crimes.forEach((crime: any, id: string) => {
       const distance = Math.hypot(this.playerRoot.position.x - crime.x, this.playerRoot.position.z - crime.z);
       if (distance < nearestDistance) {
         nearestDistance = distance;

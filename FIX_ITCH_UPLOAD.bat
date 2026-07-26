@@ -10,5 +10,5 @@ if errorlevel 1 (
   exit /b 1
 )
 echo.
-echo Finished. Upload release\Blend-in-or-Bust-v0.19.19-itch.zip to itch.io.
+echo Finished. Upload release\Blend-in-or-Bust-v0.19.20-itch.zip to itch.io.
 pause

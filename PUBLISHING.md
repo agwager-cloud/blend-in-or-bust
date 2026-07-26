@@ -1,16 +1,16 @@
-# v0.19.19 itch.io build
+# v0.19.20 itch.io build
 
-Double-click `FIX_ITCH_UPLOAD.bat`. It now rebuilds the current client source, waits for the build to finish, validates the archive paths and produces `release/Blend-in-or-Bust-v0.19.19-itch.zip`. The browser UI uses encoding-safe text and displays a dedicated museum loading scene during the first 3D asset load.
+Double-click `FIX_ITCH_UPLOAD.bat`. It now rebuilds the current client source, waits for the build to finish, validates the archive paths and produces `release/Blend-in-or-Bust-v0.19.20-itch.zip`. The browser UI uses encoding-safe text and displays a dedicated museum loading scene during the first 3D asset load.
 
 ## v0.19.18 — itch.io 404 repair
 
 The uploaded game was stuck on the loading shield because itch.io could not find the hashed CSS and JavaScript files requested by `index.html`. The old Windows archive could store nested file names with backslashes. The corrected scripts create standards-compliant forward-slash ZIP entries and verify the exact referenced filenames inside the final archive before reporting success.
 
-For the current release, double-click `FIX_ITCH_UPLOAD.bat` and upload `release\Blend-in-or-Bust-v0.19.19-itch.zip`. The button rebuilds the client so the encoding-safe labels and museum loading screen are included.
+For the current release, double-click `FIX_ITCH_UPLOAD.bat` and upload `release\Blend-in-or-Bust-v0.19.20-itch.zip`. The button rebuilds the client so the encoding-safe labels and museum loading screen are included.
 
 ## Emergency itch.io repair
 
-The current `FIX_ITCH_UPLOAD.bat` rebuilds the client and creates `release/Blend-in-or-Bust-v0.19.19-itch.zip` with validated relative paths and forward-slash ZIP entries.
+The current `FIX_ITCH_UPLOAD.bat` rebuilds the client and creates `release/Blend-in-or-Bust-v0.19.20-itch.zip` with validated relative paths and forward-slash ZIP entries.
 
 
 ## v0.19.16 itch.io loading fix
@@ -83,3 +83,7 @@ The build script verifies that `index.html` is at the root of the ZIP.
 ## v0.19.16 itch ZIP validation fix
 
 The existing-dist repair tool now normalises Windows ZIP path separators before validating the generated `assets` folder. This prevents a valid itch.io ZIP from being incorrectly rejected as missing assets.
+
+## v0.19.20 itch.io checks
+
+Run `FIX_ITCH_UPLOAD.bat`. The packager now verifies that `assets/title-background.jpg` exists in both the client build and the final ZIP. Upload only `release/Blend-in-or-Bust-v0.19.20-itch.zip`.

@@ -83,6 +83,9 @@ function Test-ItchArchive {
         if (-not $entryNames.Contains('index.html')) {
             throw 'ZIP validation failed: index.html is not at the ZIP root.'
         }
+        if (-not $entryNames.Contains('assets/title-background.jpg')) {
+            throw 'ZIP validation failed: assets/title-background.jpg is missing.'
+        }
 
         $assetFiles = @($archive.Entries | Where-Object {
             $_.FullName -match '^assets/.+' -and -not $_.FullName.EndsWith('/')

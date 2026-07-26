@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.19.19"
+    [string]$Version = "0.19.20"
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,6 +10,15 @@ $indexPath = Join-Path $distPath "index.html"
 
 if (-not (Test-Path $indexPath)) {
     throw "client\dist\index.html was not found. Run npm run build once, then run this repair script again."
+}
+$publicTitleBackground = Join-Path $projectRoot "client\public\assets\title-background.jpg"
+$distTitleBackground = Join-Path $distPath "assets\title-background.jpg"
+if (-not (Test-Path $distTitleBackground)) {
+    if (-not (Test-Path $publicTitleBackground)) {
+        throw "title-background.jpg is missing from both client\public\assets and client\dist\assets."
+    }
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $distTitleBackground) | Out-Null
+    Copy-Item $publicTitleBackground $distTitleBackground -Force
 }
 
 function Read-Utf8([string]$Path) {

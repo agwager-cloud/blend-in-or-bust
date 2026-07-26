@@ -1,6 +1,6 @@
 param(
     [string]$RenderUrl = "https://blend-in-or-bust-server.onrender.com",
-    [string]$Version = "0.19.19"
+    [string]$Version = "0.19.20"
 )
 
 $ErrorActionPreference = "Stop"
@@ -23,6 +23,11 @@ if ($sourceHealthReference) {
     throw "School-network safeguard failed: /health was found in browser source at $locations"
 }
 
+$publicTitleBackground = Join-Path $projectRoot "client\public\assets\title-background.jpg"
+if (-not (Test-Path $publicTitleBackground)) {
+    throw "The title background is missing from client\public\assets\title-background.jpg."
+}
+
 $webSocketUrl = $RenderUrl -replace '^https://', 'wss://'
 $env:VITE_SERVER_URL = $webSocketUrl
 
@@ -37,6 +42,10 @@ $distPath = Join-Path $projectRoot "client\dist"
 $indexPath = Join-Path $distPath "index.html"
 if (-not (Test-Path $indexPath)) {
     throw "client\dist\index.html was not created."
+}
+$builtTitleBackground = Join-Path $distPath "assets\title-background.jpg"
+if (-not (Test-Path $builtTitleBackground)) {
+    throw "The client build did not include assets/title-background.jpg."
 }
 
 $browserBuildFiles = Get-ChildItem $distPath -Recurse -File |

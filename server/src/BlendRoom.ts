@@ -222,20 +222,8 @@ export class BlendRoom extends Room<GameState> {
     });
     this.onMessage("settings", (client, value: unknown) => {
       const player = this.state.players.get(client.sessionId);
-      if (!player?.isHost || this.state.phase !== "lobby" || typeof value !== "object" || !value) return;
-      const settings = value as {
-        roundSeconds?: unknown;
-        blenderOverride?: unknown;
-        botsEnabled?: unknown;
-        balancedHumanRoles?: unknown;
-      };
-      const requestedRoundSeconds = Number(settings.roundSeconds);
-      this.state.roundSeconds = [180, 240, 300].includes(requestedRoundSeconds)
-        ? requestedRoundSeconds
-        : this.state.roundSeconds;
-      this.state.blenderOverride = this.clampInteger(settings.blenderOverride, 0, 6, this.state.blenderOverride);
-      this.state.botsEnabled = settings.botsEnabled === true;
-      this.state.balancedHumanRoles = this.state.botsEnabled && settings.balancedHumanRoles === true;
+      if (!player?.isHost || this.state.phase !== "lobby") return;
+      this.applyLobbySettings(value);
     });
     this.onMessage("kick-player", (client, targetSessionId: unknown) => {
       if (typeof targetSessionId !== "string" || this.state.phase !== "lobby") return;
@@ -260,9 +248,13 @@ export class BlendRoom extends Room<GameState> {
         .find((candidate) => candidate.sessionId === targetSessionId)
         ?.leave(4001);
     });
-    this.onMessage("start", (client) => {
+    this.onMessage("start", (client, value: unknown) => {
       const player = this.state.players.get(client.sessionId);
       if (!player?.isHost || this.state.phase !== "lobby") return;
+      // Apply the settings carried by the Start click atomically before bots
+      // and roles are created. This prevents a fast start from using the old
+      // Testing Bots value while the separate settings message is still in flight.
+      this.applyLobbySettings(value);
       this.startRound();
       // Keep the room joinable so students arriving after the start can enter
       // directly as security-camera spectators. Participant capacity is still
@@ -419,6 +411,29 @@ export class BlendRoom extends Room<GameState> {
 
   onDispose(): void {
     unregisterRoom(this.roomCode);
+  }
+
+  private applyLobbySettings(value: unknown): void {
+    if (typeof value !== "object" || !value) return;
+    const settings = value as {
+      roundSeconds?: unknown;
+      blenderOverride?: unknown;
+      botsEnabled?: unknown;
+      balancedHumanRoles?: unknown;
+    };
+    const requestedRoundSeconds = Number(settings.roundSeconds);
+    this.state.roundSeconds = [180, 240, 300].includes(requestedRoundSeconds)
+      ? requestedRoundSeconds
+      : this.state.roundSeconds;
+    this.state.blenderOverride = this.clampInteger(
+      settings.blenderOverride,
+      0,
+      6,
+      this.state.blenderOverride,
+    );
+    this.state.botsEnabled = settings.botsEnabled === true;
+    this.state.balancedHumanRoles = this.state.botsEnabled
+      && settings.balancedHumanRoles === true;
   }
 
   private startRound(): void {
