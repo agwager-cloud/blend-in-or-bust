@@ -147,6 +147,8 @@ let arenaEntryGeneration = 0;
 let arenaEntryPromise: Promise<void> | undefined;
 let arenaEntryRoom: Room<any> | undefined;
 let museumLoadPromise: Promise<PracticeGame> | undefined;
+let roleRevealMinimumUntil = 0;
+let roleRevealDismissTimer: number | undefined;
 
 const SERVER_WAKE_WINDOW_MS = 60_000;
 const CONNECTION_ATTEMPT_TIMEOUT_MS = 14_000;
@@ -542,6 +544,11 @@ function bindRoom(room: Room<any>, client: Client): void {
     blenderTeammates = new Set(teammateIds);
     game?.resetForRound();
     updateRoleReveal();
+    // Show the assigned role immediately, above the museum loader, and keep it
+    // visible for long enough to read even when the first 3D scene is still
+    // preparing on a slower phone, iPad or school laptop.
+    requestEnterMultiplayerArena(room);
+    showAssignedRole(room);
   });
   room.onMessage("disguise-changed", ({
     sessionId,
@@ -588,6 +595,15 @@ function bindRoom(room: Room<any>, client: Client): void {
   room.onMessage("bust-cooldown", ({ durationMs }: { durationMs: number }) => {
     if (!isCurrentRoom(room)) return;
     game?.setGlobalBustCooldown(durationMs);
+  });
+  room.onMessage("bust-rejected", ({
+    targetSessionId,
+  }: {
+    targetSessionId: string;
+    reason?: string;
+  }) => {
+    if (!isCurrentRoom(room)) return;
+    game?.rejectOptimisticBust(targetSessionId);
   });
   room.onMessage("flag-found", ({ by }: { by: string }) => {
     if (!isCurrentRoom(room)) return;
@@ -729,6 +745,20 @@ function updateRoleReveal(): void {
   revealCard.classList.toggle("buster", buster);
 }
 
+function showAssignedRole(room: Room<any>): void {
+  if (!isCurrentRoom(room) || localRole === "practice") return;
+  roleRevealMinimumUntil = performance.now() + 5_500;
+  roleReveal.classList.add("role-reveal-priority");
+  roleReveal.classList.remove("hidden");
+  if (roleRevealDismissTimer !== undefined) window.clearTimeout(roleRevealDismissTimer);
+  roleRevealDismissTimer = window.setTimeout(() => {
+    roleRevealDismissTimer = undefined;
+    roleRevealMinimumUntil = 0;
+    roleReveal.classList.remove("role-reveal-priority");
+    if (isCurrentRoom(room)) updateMatchScreens(room);
+  }, 5_500);
+}
+
 function updateMatchScreens(room: Room<any>): void {
   if (!isCurrentRoom(room)) return;
   const players = roomPlayers(room);
@@ -736,7 +766,12 @@ function updateMatchScreens(room: Room<any>): void {
   const phase = String(room.state?.phase ?? "lobby");
   const local = players.get(room.sessionId);
   const lateSpectator = Boolean(local?.isLateSpectator);
-  roleReveal.classList.toggle("hidden", phase !== "reveal" || lateSpectator);
+  const heldRoleReveal = !lateSpectator
+    && localRole !== "practice"
+    && performance.now() < roleRevealMinimumUntil;
+  const showRoleReveal = !lateSpectator && (phase === "reveal" || heldRoleReveal);
+  roleReveal.classList.toggle("role-reveal-priority", heldRoleReveal);
+  roleReveal.classList.toggle("hidden", !showRoleReveal);
   resultsOverlay.classList.toggle("hidden", phase !== "results");
   flagsCounter.textContent = `FLAGS ${room.state.flagsFound} / ${room.state.flagsRequired}`;
   const rubbishLeft = Math.max(0, Number(room.state.rubbishRequired ?? 0) - Number(room.state.rubbishCollected ?? 0));
@@ -1022,6 +1057,12 @@ function leaveRoom(consented: boolean, message = "You left the room."): void {
   localRole = "practice";
   blenderTeammates.clear();
   pendingSpectatorConcealment = [];
+  roleRevealMinimumUntil = 0;
+  if (roleRevealDismissTimer !== undefined) {
+    window.clearTimeout(roleRevealDismissTimer);
+    roleRevealDismissTimer = undefined;
+  }
+  roleReveal.classList.remove("role-reveal-priority");
   roleReveal.classList.add("hidden");
   resultsOverlay.classList.add("hidden");
   meetingOverlay.classList.add("hidden");
@@ -1108,6 +1149,9 @@ class PracticeGame {
   private spectatorConcealmentReady = true;
   private movementSuppressedUntil = 0;
   private bustTargetId = "";
+  private optimisticBustTargetId = "";
+  private optimisticBustRollbackTimer: number | undefined;
+  private lastBustPointerActivationAt = -Infinity;
   private liftTargetId = "";
   private lastLiftAnimationAt = -Infinity;
   private liftLockedUntil = -Infinity;
@@ -1270,6 +1314,7 @@ class PracticeGame {
     this.spectatorPrivacyActive = false;
     this.spectatorConcealedPlayers.clear();
     this.remoteDisguiseOverrides.clear();
+    this.clearOptimisticBust(false);
     this.globalBustBlockedUntil = 0;
     this.camera.lowerBetaLimit = 0.82;
     this.camera.upperRadiusLimit = 11;
@@ -1306,6 +1351,22 @@ class PracticeGame {
   }
 
   handleBust(targetSessionId: string): void {
+    if (targetSessionId === this.room?.sessionId && !this.localAlive) return;
+    const existingAvatar = this.remotePlayers.get(targetSessionId);
+    if (existingAvatar && !existingAvatar.alive && targetSessionId !== this.optimisticBustTargetId) return;
+    const optimisticallyHidden = targetSessionId === this.optimisticBustTargetId;
+    if (optimisticallyHidden) {
+      this.clearOptimisticBust(false);
+      const predictedAvatar = this.remotePlayers.get(targetSessionId);
+      if (predictedAvatar) {
+        predictedAvatar.alive = false;
+        predictedAvatar.root.setEnabled(false);
+        predictedAvatar.collider.setEnabled(false);
+        predictedAvatar.label.style.opacity = "0";
+        predictedAvatar.label.style.display = "none";
+      }
+      return;
+    }
     this.playPopSound();
     if (targetSessionId === this.room?.sessionId) {
       this.localAlive = false;
@@ -2215,9 +2276,21 @@ class PracticeGame {
     });
     window.addEventListener("keyup", (event) => this.input.delete(event.code));
     blendButton.addEventListener("click", () => this.toggleBlend());
-    bustButton.addEventListener("click", () => {
+    const activateBustButton = () => {
       if (this.bustTargetId) this.tryBust();
       else this.tryLift();
+    };
+    // Buttons normally fire click only after the finger or mouse button is
+    // released. Start a Bust on pointer-down so the action feels immediate.
+    bustButton.addEventListener("pointerdown", (event) => {
+      if (event.pointerType === "mouse" && event.button !== 0) return;
+      event.preventDefault();
+      this.lastBustPointerActivationAt = performance.now();
+      activateBustButton();
+    });
+    bustButton.addEventListener("click", () => {
+      if (performance.now() - this.lastBustPointerActivationAt < 500) return;
+      activateBustButton();
     });
     liftButton.addEventListener("click", () => this.tryLift());
     reportButton.addEventListener("click", () => this.tryReport());
@@ -2662,6 +2735,13 @@ class PracticeGame {
         avatar.label.style.display = "none";
         return;
       }
+      if (this.optimisticBustTargetId === sessionId) {
+        avatar.root.setEnabled(false);
+        avatar.collider.setEnabled(false);
+        avatar.label.style.opacity = "0";
+        avatar.label.style.display = "none";
+        return;
+      }
       avatar.root.setEnabled(true);
       avatar.collider.setEnabled(true);
       if (player.moving) {
@@ -2940,8 +3020,10 @@ class PracticeGame {
     const finalFlagFrenzy = room.state.phase === "game"
       && room.state.flagsRequired - room.state.flagsFound === 1;
     flagsCounter.closest(".status-pill")?.classList.toggle("frenzy", finalFlagFrenzy);
-    if (room.state.phase === "reveal") {
-      const seconds = Math.max(0, Number(room.state.revealSecondsRemaining ?? 0));
+    const localRoleSeconds = Math.max(0, Math.ceil((roleRevealMinimumUntil - performance.now()) / 1000));
+    if (room.state.phase === "reveal" || localRoleSeconds > 0) {
+      const serverSeconds = Math.max(0, Number(room.state.revealSecondsRemaining ?? 0));
+      const seconds = Math.max(serverSeconds, localRoleSeconds);
       revealCountdown.textContent = `Round starts in ${seconds}`;
       roundTimer.textContent = this.formatTime(Number(room.state.roundSecondsRemaining ?? room.state.roundSeconds));
     } else if (room.state.phase === "game") {
@@ -3167,8 +3249,57 @@ class PracticeGame {
   }
 
   private tryBust(): void {
-    if (!this.bustTargetId || bustButton.disabled) return;
-    this.room?.send("bust", this.bustTargetId);
+    if (!this.bustTargetId || bustButton.disabled || this.optimisticBustTargetId) return;
+    const targetSessionId = this.bustTargetId;
+    this.beginOptimisticBust(targetSessionId);
+    this.room?.send("bust", targetSessionId);
+  }
+
+  private beginOptimisticBust(targetSessionId: string): void {
+    const avatar = this.remotePlayers.get(targetSessionId);
+    if (!avatar) return;
+    this.optimisticBustTargetId = targetSessionId;
+    bustButton.disabled = true;
+    avatar.root.setEnabled(false);
+    avatar.collider.setEnabled(false);
+    avatar.label.style.opacity = "0";
+    avatar.label.style.display = "none";
+    this.playPopSound();
+    this.createBurstFragments(avatar.root.position.clone());
+    if (this.optimisticBustRollbackTimer !== undefined) {
+      window.clearTimeout(this.optimisticBustRollbackTimer);
+    }
+    this.optimisticBustRollbackTimer = window.setTimeout(() => {
+      this.optimisticBustRollbackTimer = undefined;
+      if (this.optimisticBustTargetId !== targetSessionId) return;
+      const target = this.room ? roomPlayers(this.room)?.get(targetSessionId) : undefined;
+      if (target?.alive === false) return;
+      this.clearOptimisticBust(true);
+    }, 1_500);
+  }
+
+  rejectOptimisticBust(targetSessionId: string): void {
+    if (this.optimisticBustTargetId !== targetSessionId) return;
+    this.clearOptimisticBust(true);
+  }
+
+  private clearOptimisticBust(restoreTarget: boolean): void {
+    if (this.optimisticBustRollbackTimer !== undefined) {
+      window.clearTimeout(this.optimisticBustRollbackTimer);
+      this.optimisticBustRollbackTimer = undefined;
+    }
+    const targetSessionId = this.optimisticBustTargetId;
+    this.optimisticBustTargetId = "";
+    if (!restoreTarget || !targetSessionId) return;
+    const avatar = this.remotePlayers.get(targetSessionId);
+    const target = this.room ? roomPlayers(this.room)?.get(targetSessionId) : undefined;
+    if (!avatar || target?.alive === false) return;
+    avatar.alive = true;
+    avatar.root.scaling.setAll(1);
+    avatar.root.setEnabled(true);
+    avatar.collider.setEnabled(true);
+    avatar.label.style.display = "block";
+    avatar.label.style.opacity = String(avatar.labelOpacity);
   }
 
   private updateLiftControl(): void {

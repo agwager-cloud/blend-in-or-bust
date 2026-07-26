@@ -118,35 +118,58 @@ export class BlendRoom extends Room<GameState> {
       });
     });
     this.onMessage("bust", (client, targetSessionId: unknown) => {
-      if (typeof targetSessionId !== "string" || this.state.phase !== "game") return;
+      const requestedTargetId = typeof targetSessionId === "string" ? targetSessionId : "";
+      const reject = (reason: string) => client.send("bust-rejected", {
+        targetSessionId: requestedTargetId,
+        reason,
+      });
+      if (!requestedTargetId || this.state.phase !== "game") {
+        reject("not-active");
+        return;
+      }
       const attacker = this.state.players.get(client.sessionId);
-      const target = this.state.players.get(targetSessionId);
-      if (!attacker?.alive || !target?.alive) return;
-      if (!attacker.disguise) return;
-      if (this.roles.get(client.sessionId) !== "blender" || this.roles.get(targetSessionId) !== "seeker") return;
+      const target = this.state.players.get(requestedTargetId);
+      if (!attacker?.alive || !target?.alive) {
+        reject("not-alive");
+        return;
+      }
+      if (!attacker.disguise) {
+        reject("not-disguised");
+        return;
+      }
+      if (this.roles.get(client.sessionId) !== "blender" || this.roles.get(requestedTargetId) !== "seeker") {
+        reject("invalid-target");
+        return;
+      }
       const now = Date.now();
       const distanceSquared = (attacker.x - target.x) ** 2 + (attacker.z - target.z) ** 2;
-      if (distanceSquared > 3.35 ** 2) return;
+      if (distanceSquared > 3.35 ** 2) {
+        reject("out-of-range");
+        return;
+      }
       // Claim the one shared Bust slot before changing the victim. Human and
-      // bot Blenders both pass through this same atomic server-side gate.
-      if (!this.tryClaimGlobalBust(now)) return;
+      // bot Busters both pass through this same atomic server-side gate.
+      if (!this.tryClaimGlobalBust(now)) {
+        reject("cooldown");
+        return;
+      }
       target.alive = false;
       target.moving = false;
       target.disguise = "";
       target.spectateUnlockAt = now + 15_000;
       target.spectateTarget = "";
       const crime = new CrimeState();
-      crime.id = `crime-${now}-${targetSessionId}`;
+      crime.id = `crime-${now}-${requestedTargetId}`;
       crime.victimName = target.name;
       crime.x = target.x;
       crime.z = target.z;
       this.state.crimes.set(crime.id, crime);
-      // Conceal every Blender before the Busted message changes the victim
+      // Conceal every Buster before the Busted message changes the victim
       // into a spectator, preventing even a single rendered frame of the
-      // attacker or another Blender from being visible.
-      if (!target.isBot) this.sendSpectatorConcealment(targetSessionId);
+      // attacker or another Buster from being visible.
+      if (!target.isBot) this.sendSpectatorConcealment(requestedTargetId);
       this.broadcast("busted", {
-        targetSessionId,
+        targetSessionId: requestedTargetId,
         attackerSessionId: client.sessionId,
         targetName: target.name,
       });
@@ -569,9 +592,9 @@ export class BlendRoom extends Room<GameState> {
     this.state.rubbishCollected = 0;
     this.state.winner = "";
     this.state.phase = "reveal";
-    this.state.revealEndsAt = Date.now() + 4500;
+    this.state.revealEndsAt = Date.now() + 6000;
     this.state.roundEndsAt = this.state.revealEndsAt + this.state.roundSeconds * 1000;
-    this.state.revealSecondsRemaining = 5;
+    this.state.revealSecondsRemaining = 6;
     this.state.roundSecondsRemaining = this.state.roundSeconds;
     this.state.meetingSecondsRemaining = 0;
     [...this.state.players]

@@ -1,3 +1,11 @@
+## Version 0.19.21 - Reliable Role Reveal and Instant Bust Response
+
+- The assigned BUSTER or BLENDER card now appears immediately above the first museum loading screen and remains readable for at least 5.5 seconds.
+- The server reveal phase is six seconds, while the client keeps the role card visible independently if the 3D museum is still preparing.
+- Bust input begins on pointer-down instead of waiting for finger or mouse release.
+- The attacking player receives an immediate predicted Bust visual and sound while the server remains authoritative.
+- Rejected Busts are restored immediately through a server response; successful Busts retain the shared global cooldown rules.
+
 ## Version 0.19.20 - Encoding-Safe UI and Museum Loading Screen
 
 - Replaced every player-facing emoji, bullet, special dash and arrow with ASCII-safe text or HTML entities so itch.io cannot display broken character sequences.
@@ -18,7 +26,7 @@
 
 ## Emergency itch.io repair
 
-To create the corrected itch.io upload, double-click `FIX_ITCH_UPLOAD.bat`. It rebuilds the current client source, validates all generated files and creates `release/Blend-in-or-Bust-v0.19.20-itch.zip`. No new dependency installation is required.
+To create the corrected itch.io upload, double-click `FIX_ITCH_UPLOAD.bat`. It rebuilds the current client source, validates all generated files and creates `release/Blend-in-or-Bust-v0.19.21-itch.zip`. No new dependency installation is required.
 
 
 ## v0.19.16 itch.io loading fix

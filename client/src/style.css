@@ -1504,3 +1504,8 @@ select {
   .sound-toggle > span { display: inline; }
   .scene-loading-card { padding: 20px 18px; }
 }
+
+/* v0.19.21 - role reveal must remain above the first museum load screen. */
+#role-reveal.role-reveal-priority {
+  z-index: 140;
+}
