@@ -1,6 +1,6 @@
 param(
     [string]$RenderUrl = "https://blend-in-or-bust-server.onrender.com",
-    [string]$Version = "0.19.14"
+    [string]$Version = "0.19.19"
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,6 +10,7 @@ if ($RenderUrl -notmatch '^https://[^/]+$') {
 }
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot "itch-zip-utils.ps1")
 Set-Location $projectRoot
 
 # School-network rule: the browser build connects through the normal
@@ -47,43 +48,41 @@ if ($builtHealthReference) {
     throw "School-network safeguard failed: /health was found in the browser build at $locations"
 }
 
+# Verify that itch.io can resolve every generated script and stylesheet from
+# the nested HTML iframe path. Absolute root URLs cause 404 errors on itch.io.
+$indexContents = Get-Content $indexPath -Raw
+if ($indexContents -match '(?:src|href)="/') {
+    throw "itch.io path validation failed: index.html contains a root-relative script or stylesheet URL."
+}
+$assetReferences = [regex]::Matches($indexContents, '(?:src|href)="([^"#?]+)"')
+foreach ($match in $assetReferences) {
+    $reference = $match.Groups[1].Value
+    if ($reference -match '^(?:https?:|data:|blob:)') { continue }
+    $relativeReference = $reference -replace '^\./', ''
+    $localReference = $relativeReference -replace '/', [IO.Path]::DirectorySeparatorChar
+    $targetPath = Join-Path $distPath $localReference
+    if (-not (Test-Path $targetPath)) {
+        throw "itch.io path validation failed: index.html references missing file $reference"
+    }
+}
+
+$absolutePublicReferences = $browserBuildFiles |
+    Select-String -Pattern '["'']\/assets\/|url\(["'']?\/assets\/' -ErrorAction SilentlyContinue
+if ($absolutePublicReferences) {
+    $locations = ($absolutePublicReferences | ForEach-Object { "$($_.Path):$($_.LineNumber)" }) -join ", "
+    throw "itch.io path validation failed: an absolute /assets/ browser URL remains at $locations"
+}
+
 $releasePath = Join-Path $projectRoot "release"
 New-Item -ItemType Directory -Force -Path $releasePath | Out-Null
 $zipPath = Join-Path $releasePath "Blend-in-or-Bust-v$Version-itch.zip"
-if (Test-Path $zipPath) {
-    Remove-Item $zipPath -Force
-}
 
-Compress-Archive -Path (Join-Path $distPath "*") -DestinationPath $zipPath -CompressionLevel Optimal
-
-Add-Type -AssemblyName System.IO.Compression.FileSystem
-$archive = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
-try {
-    $hasRootIndex = $archive.Entries | Where-Object { $_.FullName -eq "index.html" }
-    if (-not $hasRootIndex) {
-        throw "ZIP validation failed: index.html is not at the ZIP root."
-    }
-
-    foreach ($entry in $archive.Entries) {
-        if ($entry.FullName -notmatch '\.(html|js|css)$') { continue }
-        $stream = $entry.Open()
-        $reader = New-Object System.IO.StreamReader($stream)
-        try {
-            $contents = $reader.ReadToEnd()
-            if ($contents.Contains("/health")) {
-                throw "School-network safeguard failed: /health was found inside ZIP entry $($entry.FullName)"
-            }
-        }
-        finally {
-            $reader.Dispose()
-            $stream.Dispose()
-        }
-    }
-}
-finally {
-    $archive.Dispose()
-}
+# Create standards-compliant ZIP entries using forward slashes. This prevents
+# itch.io 404s where index.html asks for assets/file.js but the Windows archive
+# stored the same file as assets\file.js.
+New-ItchArchive -SourceDirectory $distPath -DestinationZip $zipPath
+Test-ItchArchive -ZipPath $zipPath
 
 Write-Host "Created: $zipPath" -ForegroundColor Green
 Write-Host "Server:  $webSocketUrl" -ForegroundColor Green
-Write-Host "Verified: itch.io browser ZIP contains no /health request." -ForegroundColor Green
+Write-Host "Verified: exact index assets exist, forward-slash ZIP paths, ASCII-safe UI text, loading screens, and no /health request." -ForegroundColor Green

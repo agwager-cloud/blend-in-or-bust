@@ -1,3 +1,33 @@
+## Version 0.19.19 - Encoding-Safe UI and Museum Loading Screen
+
+- Replaced every player-facing emoji, bullet, special dash and arrow with ASCII-safe text or HTML entities so itch.io cannot display broken character sequences.
+- The sound control now shows MUSIC ON / MUSIC OFF outside gameplay and ON / OFF inside the compact game HUD.
+- Flags, rubbish, active-player totals, bot options, spectator controls and report labels now use clear text.
+- Added a full-screen LOADING MUSEUM scene while the 25 rooms, paintings, textures, furniture, sounds and imported props load for the first time.
+- The loading scene remains until Babylon reports that the scene is ready.
+- Updated the itch.io build button to rebuild the current source before packaging, preventing an older damaged client/dist folder from being reused.
+- The school-network-safe direct WebSocket connection remains unchanged and no browser /health request is used.
+
+## v0.19.18 itch.io archive path fix
+
+- Fixed the confirmed itch.io 404 error for the generated hashed JavaScript and CSS files.
+- The previous Windows repair ZIP could contain entries such as `assets\index.js`; itch.io requests `assets/index.js`, so the files could not be found even though they appeared to be inside the ZIP.
+- Both itch.io packaging scripts now create every archive entry with forward-slash paths.
+- Validation opens the finished ZIP and confirms that the exact JavaScript and CSS filenames referenced by `index.html` are present.
+- Keeps `index.html` at the ZIP root and preserves the no-`/health` school-network safeguard.
+
+## Emergency itch.io repair
+
+To create the corrected itch.io upload, double-click `FIX_ITCH_UPLOAD.bat`. It rebuilds the current client source, validates all generated files and creates `release/Blend-in-or-Bust-v0.19.19-itch.zip`. No new dependency installation is required.
+
+
+## v0.19.16 itch.io loading fix
+
+- Uses relative script, stylesheet and public asset URLs for itch.io nested iframe paths.
+- Adds a clean loading shield so unstyled interface text is never shown during startup.
+- The itch build script now rejects root-relative or missing browser assets before creating the ZIP.
+- Preserves direct WebSocket server connection and contains no browser `/health` preflight.
+
 # Blend in or Bust
 
 **Hide. Deceive. Survive.**
@@ -962,3 +992,7 @@ The server health check is available at `http://localhost:2567/health`.
 - Responsive phone, tablet and desktop HUD
 - Live multiplayer room state, reconnection and host controls
 - Networked movement, names, disguises and player collisions
+
+## v0.19.16 itch ZIP validation fix
+
+The existing-dist repair tool now normalises Windows ZIP path separators before validating the generated `assets` folder. This prevents a valid itch.io ZIP from being incorrectly rejected as missing assets.

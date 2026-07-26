@@ -282,7 +282,7 @@ export class BlendRoom extends Room<GameState> {
       if (lobbyParticipants >= 24) {
         throw new ServerError(
           403,
-          "ROOM FULL — this room already has 24 players. Please host a new room for the additional students.",
+          "ROOM FULL - this room already has 24 players. Please host a new room for the additional students.",
         );
       }
     }

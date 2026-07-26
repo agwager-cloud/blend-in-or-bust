@@ -25,9 +25,39 @@ import "@babylonjs/loaders";
 import { Client, Room } from "colyseus.js";
 import "./style.css";
 
+const assetUrl = (path: string): string =>
+  `${import.meta.env.BASE_URL}${path.replace(/^\/+/, "")}`;
+
+document.documentElement.style.setProperty(
+  "--title-background-image",
+  `url("${assetUrl("assets/title-background.jpg")}")`,
+);
+
+function revealAppWhenStyled(attempt = 0): void {
+  const stylesLoaded = getComputedStyle(document.documentElement)
+    .getPropertyValue("--blend-styles-loaded")
+    .trim() === "1";
+  if (stylesLoaded) {
+    document.documentElement.classList.add("app-ready");
+    document.querySelector("#boot-loading")?.remove();
+    return;
+  }
+  if (attempt < 100) {
+    window.setTimeout(() => revealAppWhenStyled(attempt + 1), 100);
+    return;
+  }
+  const message = document.querySelector<HTMLElement>("#boot-loading-message");
+  if (message) {
+    message.textContent = "The game files did not load correctly. Refresh the itch.io page and try again.";
+  }
+}
+window.setTimeout(() => revealAppWhenStyled(), 0);
+
 const titleScreen = document.querySelector<HTMLElement>("#title-screen")!;
 const lobbyScreen = document.querySelector<HTMLElement>("#lobby-screen")!;
 const gameScreen = document.querySelector<HTMLElement>("#game-screen")!;
+const sceneLoading = document.querySelector<HTMLElement>("#scene-loading")!;
+const sceneLoadingMessage = document.querySelector<HTMLElement>("#scene-loading-message")!;
 const canvas = document.querySelector<HTMLCanvasElement>("#game-canvas")!;
 const nameInput = document.querySelector<HTMLInputElement>("#player-name")!;
 const roomInput = document.querySelector<HTMLInputElement>("#room-code")!;
@@ -184,11 +214,11 @@ window.addEventListener("orientationchange", () => {
 
 class BackgroundMusic {
   private readonly tracks = [
-    "/assets/music/leberch-landscape-history-255440.mp3",
-    "/assets/music/leberch-history-ambient-375201.mp3",
-    "/assets/music/leberch-history-music-355590.mp3",
-    "/assets/music/leberch-background-history-375263.mp3",
-    "/assets/music/leberch-history-movie-375359.mp3",
+    assetUrl("assets/music/leberch-landscape-history-255440.mp3"),
+    assetUrl("assets/music/leberch-history-ambient-375201.mp3"),
+    assetUrl("assets/music/leberch-history-music-355590.mp3"),
+    assetUrl("assets/music/leberch-background-history-375263.mp3"),
+    assetUrl("assets/music/leberch-history-movie-375359.mp3"),
   ];
   private queue: string[] = [];
   private lastTrack = "";
@@ -196,7 +226,7 @@ class BackgroundMusic {
   private meetingActive = false;
   private muted = localStorage.getItem("blend-music-muted") === "true";
   private readonly audio = new Audio();
-  private readonly meetingAudio = new Audio("/assets/music/leberch-dark-history-262605.mp3");
+  private readonly meetingAudio = new Audio(assetUrl("assets/music/leberch-dark-history-262605.mp3"));
 
   constructor() {
     this.audio.volume = 0.14;
@@ -268,7 +298,7 @@ class BackgroundMusic {
   }
 
   private syncButton(): void {
-    soundToggle.querySelector("span")!.textContent = this.muted ? "🔇" : "🔊";
+    soundToggle.querySelector("span")!.textContent = this.muted ? "OFF" : "ON";
     soundToggle.querySelector("strong")!.textContent = this.muted ? "MUSIC OFF" : "MUSIC ON";
     soundToggle.setAttribute("aria-label", this.muted ? "Play background music" : "Mute background music");
     soundToggle.classList.toggle("muted", this.muted);
@@ -314,7 +344,7 @@ function updateServerWakeMessage(
     ? "creating your room"
     : `finding room ${roomCode}`;
   formMessage.textContent =
-    `FREE SERVER MAY BE ASLEEP — waking it now and ${task}. ` +
+    `FREE SERVER MAY BE ASLEEP - waking it now and ${task}. ` +
     `Please wait; this can take up to 60 seconds. ${remainingSeconds}s remaining.`;
 }
 
@@ -330,7 +360,7 @@ function isTerminalConnectionError(error: unknown): boolean {
 function formatConnectionError(error: unknown): string {
   const message = error instanceof Error ? error.message : "Could not connect to the server.";
   if (/full|24 players|24 participants/i.test(message)) {
-    return "ROOM FULL — this room already has 24 players. Please host a new room for the additional students.";
+    return "ROOM FULL - this room already has 24 players. Please host a new room for the additional students.";
   }
   return message;
 }
@@ -449,7 +479,7 @@ async function connectMultiplayer(action: MultiplayerAction): Promise<void> {
         ? ` Last response: ${lastError.message}`
         : "";
       throw new Error(
-        "SERVER DID NOT RESPOND WITHIN 60 SECONDS — the free server may still be waking. " +
+        "SERVER DID NOT RESPOND WITHIN 60 SECONDS - the free server may still be waking. " +
         `Press Host or Join to try again.${finalDetail}`,
       );
     }
@@ -553,7 +583,7 @@ function bindRoom(room: Room<any>, client: Client): void {
       collected
         ? "You found a hidden flag!"
         : flagId
-          ? "A flag is hidden here — only a Blender can collect it."
+          ? "A flag is hidden here - only a Blender can collect it."
           : "Nothing was hidden here.",
       collected ? 5000 : 2600,
     );
@@ -606,7 +636,7 @@ function updateLobby(): void {
     row.className = "lobby-player";
     row.innerHTML = `<span class="player-dot"></span><span class="lobby-player-name"></span>${player.isHost ? '<span class="host-badge">HOST</span>' : ""}`;
     row.querySelector<HTMLElement>(".lobby-player-name")!.textContent = player.isLateSpectator
-      ? `${player.name} • SPECTATOR`
+      ? `${player.name} | SPECTATOR`
       : player.name;
     if (localIsHost && sessionId !== activeRoom?.sessionId && !player.isBot) {
       const removeButton = document.createElement("button");
@@ -637,10 +667,10 @@ function updateLobby(): void {
   playerList.classList.toggle("full", lobbyParticipants >= 24);
   lobbyMessage.classList.toggle("room-full", lobbyParticipants >= 24);
   lobbyMessage.textContent = lobbyParticipants >= 24
-    ? "24 / 24 participants • ROOM FULL — additional students should host a new room."
+    ? "24 / 24 participants - ROOM FULL - additional students should host a new room."
     : lobbySpectators > 0
-      ? `${lobbyParticipants} / 24 participants • ${lobbySpectators} spectators • Share code ${activeRoom.state.roomCode}`
-      : `${lobbyParticipants} / 24 participants • Share code ${activeRoom.state.roomCode}`;
+      ? `${lobbyParticipants} / 24 participants - ${lobbySpectators} spectators - Share code ${activeRoom.state.roomCode}`
+      : `${lobbyParticipants} / 24 participants - Share code ${activeRoom.state.roomCode}`;
 }
 
 function updateRoleReveal(): void {
@@ -658,9 +688,9 @@ function updateMatchScreens(room: Room<any>): void {
   const lateSpectator = Boolean(local?.isLateSpectator);
   roleReveal.classList.toggle("hidden", phase !== "reveal" || lateSpectator);
   resultsOverlay.classList.toggle("hidden", phase !== "results");
-  flagsCounter.textContent = `⚑ ${room.state.flagsFound} / ${room.state.flagsRequired}`;
+  flagsCounter.textContent = `FLAGS ${room.state.flagsFound} / ${room.state.flagsRequired}`;
   const rubbishLeft = Math.max(0, Number(room.state.rubbishRequired ?? 0) - Number(room.state.rubbishCollected ?? 0));
-  rubbishCounter.textContent = `🗑 ${rubbishLeft} left`;
+  rubbishCounter.textContent = `${rubbishLeft} RUBBISH LEFT`;
   let activePlayers = 0;
   let bustedPlayers = 0;
   room.state.players.forEach((player: any) => {
@@ -668,7 +698,7 @@ function updateMatchScreens(room: Room<any>): void {
     if (player.alive) activePlayers += 1;
     else bustedPlayers += 1;
   });
-  playersCounter.textContent = `● ${activePlayers} ACTIVE`;
+  playersCounter.textContent = `${activePlayers} ACTIVE`;
   bustedCounter.textContent = `${bustedPlayers} busted`;
   if (phase === "results") {
     const blendersWon = room.state.winner === "seekers";
@@ -711,10 +741,10 @@ function updateMeetingUi(room: Room<any>): void {
   room.state.players.forEach((player: any, sessionId: string) => {
     const button = document.createElement("button");
     button.className = "vote-card";
-    const displayName = player.isBot ? `${player.name} • BOT` : player.name;
+    const displayName = player.isBot ? `${player.name} | BOT` : player.name;
     button.textContent = player.isLateSpectator
-      ? `${displayName} • SPECTATOR`
-      : player.alive ? displayName : `${displayName} • BUSTED`;
+      ? `${displayName} - SPECTATOR`
+      : player.alive ? displayName : `${displayName} - BUSTED`;
     button.disabled = phase !== "voting" || !local?.alive || !player.alive
       || Boolean(player.isLateSpectator) || Boolean(submittedVote);
     button.classList.toggle("selected", submittedVote === sessionId);
@@ -737,7 +767,7 @@ function updateMeetingUi(room: Room<any>): void {
       ? "Choose one active player or skip. Your choice cannot be changed."
       : "Busted players cannot vote or reveal information.";
     voteStatus.textContent = submittedVote
-      ? "Vote submitted — waiting for the others."
+      ? "Vote submitted - waiting for the others."
       : `${room.state.votesCast} votes submitted`;
   } else {
     meetingEyebrow.textContent = "VOTE RESULT";
@@ -758,6 +788,34 @@ function submitVote(targetId: string): void {
 
 skipVoteButton.addEventListener("click", () => submitVote("skip"));
 
+function showSceneLoading(message: string): void {
+  sceneLoadingMessage.textContent = message;
+  sceneLoading.classList.remove("hidden");
+}
+
+function hideSceneLoading(): void {
+  sceneLoading.classList.add("hidden");
+}
+
+async function ensureMuseumLoaded(): Promise<PracticeGame> {
+  if (game) {
+    hideSceneLoading();
+    return game;
+  }
+  showSceneLoading("Building the 25 museum rooms...");
+  const nextGame = new PracticeGame(canvas, playerLabel);
+  try {
+    await nextGame.start((message) => showSceneLoading(message));
+    game = nextGame;
+    hideSceneLoading();
+    return nextGame;
+  } catch (error) {
+    console.error("Museum loading failed", error);
+    sceneLoadingMessage.textContent = "The museum could not finish loading. Refresh the itch.io page and try again.";
+    throw error;
+  }
+}
+
 async function enterMultiplayerArena(room: Room<any>): Promise<void> {
   lobbyScreen.classList.add("hidden");
   titleScreen.classList.add("hidden");
@@ -765,17 +823,14 @@ async function enterMultiplayerArena(room: Room<any>): Promise<void> {
   arenaTitle.textContent = `ROOM ${room.state.roomCode}`;
   arenaSubtitle.textContent = `${room.state.players.size} players connected`;
   playerLabel.textContent = nameInput.value.trim().toUpperCase();
-  if (!game) {
-    game = new PracticeGame(canvas, playerLabel);
-    await game.start();
-  }
-  game.setRoom(room);
+  const loadedGame = await ensureMuseumLoaded();
+  loadedGame.setRoom(room);
   if (pendingSpectatorConcealment.length > 0) {
-    game.setSpectatorConcealment(pendingSpectatorConcealment);
+    loadedGame.setSpectatorConcealment(pendingSpectatorConcealment);
   }
   const local = room.state.players.get(room.sessionId);
   if (local?.isLateSpectator) room.send("spectator-ready");
-  game.resume();
+  loadedGame.resume();
   updateRoleReveal();
   updateMatchScreens(room);
 }
@@ -789,12 +844,8 @@ async function enterPractice(): Promise<void> {
   arenaTitle.textContent = "MIDNIGHT MUSEUM";
   arenaSubtitle.textContent = "Local museum exploration";
   playerLabel.textContent = name.toUpperCase();
-  if (!game) {
-    game = new PracticeGame(canvas, playerLabel);
-    await game.start();
-  } else {
-    game.resume();
-  }
+  const loadedGame = await ensureMuseumLoaded();
+  loadedGame.resume();
 }
 
 hostButton.addEventListener("click", () => void connectMultiplayer("host"));
@@ -956,7 +1007,7 @@ class PracticeGame {
   private lastMapRoomIndex = -1;
   private objectiveNoticeUntil = 0;
   private flagSignalState = "";
-  private readonly crimeRoomAudio = new Audio("/assets/crime-room-alert.mp3");
+  private readonly crimeRoomAudio = new Audio(assetUrl("assets/crime-room-alert.mp3"));
   private running = false;
 
   constructor(
@@ -978,10 +1029,14 @@ class PracticeGame {
     this.scene.skipPointerMovePicking = true;
   }
 
-  async start(): Promise<void> {
+  async start(reportProgress: (message: string) => void = () => undefined): Promise<void> {
+    reportProgress("Building the 25 museum rooms...");
     this.createMuseumMap();
     this.createWorld();
+    reportProgress("Loading artwork, furniture and museum props...");
     await this.loadGrandGalleryArt();
+    reportProgress("Finishing textures, lighting and sound...");
+    await this.scene.whenReadyAsync();
     this.attachInput();
     this.engine.runRenderLoop(() => {
       if (!this.running) return;
@@ -1281,7 +1336,7 @@ class PracticeGame {
     museumMapGrid.querySelectorAll<HTMLElement>(".museum-map-cell").forEach((cell) => {
       cell.classList.toggle("active", Number(cell.dataset.roomIndex) === roomIndex);
     });
-    museumMap.setAttribute("aria-label", `Museum map — ${PracticeGame.ROOM_NAMES[roomIndex]}`);
+    museumMap.setAttribute("aria-label", `Museum map - ${PracticeGame.ROOM_NAMES[roomIndex]}`);
   }
 
   private createWorld(): void {
@@ -1521,7 +1576,7 @@ class PracticeGame {
       portrait.position.x += inwardX * portraitInset;
       portrait.rotation.copyFrom(frame.rotation);
       portrait.alwaysSelectAsActiveMesh = true;
-      const texture = new Texture("/assets/museum/art/museum-paintings-atlas-v1.png", this.scene);
+      const texture = new Texture(assetUrl("assets/museum/art/museum-paintings-atlas-v1.png"), this.scene);
       texture.uScale = 0.25;
       texture.vScale = 1 / 3;
       texture.uOffset = (index % 4) * 0.25;
@@ -1770,10 +1825,10 @@ class PracticeGame {
       const floor = this.scene.getMeshByName(`room-floor-${index}`) as Mesh | null;
       if (!floor) return;
       const marble = new PBRMaterial(`museum-marble-${index}`, this.scene);
-      const diffuse = new Texture("/assets/museum/marble_01_diff_1k.jpg", this.scene);
+      const diffuse = new Texture(assetUrl("assets/museum/marble_01_diff_1k.jpg"), this.scene);
       diffuse.uScale = 3.4;
       diffuse.vScale = 3.4;
-      const normal = new Texture("/assets/museum/marble_01_nor_dx_1k.jpg", this.scene);
+      const normal = new Texture(assetUrl("assets/museum/marble_01_nor_dx_1k.jpg"), this.scene);
       normal.uScale = 3.4;
       normal.vScale = 3.4;
       marble.albedoTexture = diffuse;
@@ -1786,10 +1841,10 @@ class PracticeGame {
     const walls = this.cameraOccluders;
     const wallMaterial = walls[0]?.material as PBRMaterial | undefined;
     if (wallMaterial) {
-      const diffuse = new Texture("/assets/museum/painted_plaster_wall_diff_1k.jpg", this.scene);
+      const diffuse = new Texture(assetUrl("assets/museum/painted_plaster_wall_diff_1k.jpg"), this.scene);
       diffuse.uScale = 4;
       diffuse.vScale = 2;
-      const normal = new Texture("/assets/museum/painted_plaster_wall_nor_dx_1k.jpg", this.scene);
+      const normal = new Texture(assetUrl("assets/museum/painted_plaster_wall_nor_dx_1k.jpg"), this.scene);
       normal.uScale = 4;
       normal.vScale = 2;
       wallMaterial.albedoTexture = diffuse;
@@ -1906,7 +1961,7 @@ class PracticeGame {
     try {
       const result = await SceneLoader.ImportMeshAsync(
         "",
-        "/assets/museum/kenney/",
+        assetUrl("assets/museum/kenney/"),
         fileName,
         this.scene,
       );
@@ -2735,9 +2790,9 @@ class PracticeGame {
   }
 
   private updateRoundHud(room: Room<any>): void {
-    flagsCounter.textContent = `⚑ ${room.state.flagsFound} / ${room.state.flagsRequired}`;
+    flagsCounter.textContent = `FLAGS ${room.state.flagsFound} / ${room.state.flagsRequired}`;
     const rubbishLeft = Math.max(0, Number(room.state.rubbishRequired ?? 0) - Number(room.state.rubbishCollected ?? 0));
-    rubbishCounter.textContent = `🗑 ${rubbishLeft} left`;
+    rubbishCounter.textContent = `${rubbishLeft} RUBBISH LEFT`;
     const finalFlagFrenzy = room.state.phase === "game"
       && room.state.flagsRequired - room.state.flagsFound === 1;
     flagsCounter.closest(".status-pill")?.classList.toggle("frenzy", finalFlagFrenzy);
@@ -2793,11 +2848,11 @@ class PracticeGame {
 
     let nextSignal: string;
     if (!Number.isFinite(nearestDistance)) {
-      nextSignal = "COLD — try another room.";
+      nextSignal = "COLD - try another room.";
     } else if (nearestDistance <= 4.2) {
-      nextSignal = "HOT — lift the nearest prop.";
+      nextSignal = "HOT - lift the nearest prop.";
     } else {
-      nextSignal = "WARM — search this room.";
+      nextSignal = "WARM - search this room.";
     }
 
     if (nextSignal !== this.flagSignalState) {
@@ -3087,7 +3142,7 @@ class PracticeGame {
       flag.dispose();
     });
     if (!collected) return;
-    const sound = new Audio("/assets/flag.mp3");
+    const sound = new Audio(assetUrl("assets/flag.mp3"));
     sound.volume = 0.9;
     void sound.play().catch(() => undefined);
   }
@@ -3095,7 +3150,7 @@ class PracticeGame {
   private showFlagFoundCelebration(): void {
     const banner = document.createElement("div");
     banner.className = "flag-found-celebration";
-    banner.innerHTML = "<strong>⚑ FLAG FOUND!</strong><span>Excellent searching!</span>";
+    banner.innerHTML = "<strong>FLAG FOUND!</strong><span>Excellent searching!</span>";
     gameScreen.append(banner);
     banner.addEventListener("animationend", () => banner.remove(), { once: true });
   }
@@ -3153,7 +3208,7 @@ class PracticeGame {
   }
 
   private playPopSound(): void {
-    const sound = new Audio("/assets/bust.mp3");
+    const sound = new Audio(assetUrl("assets/bust.mp3"));
     sound.volume = 0.82;
     void sound.play().catch(() => {
       // Some browsers may still require a prior touch before playing audio.
@@ -3304,7 +3359,7 @@ class PracticeGame {
       this.setTargetProp(undefined);
       blendButton.disabled = true;
       blendLabel.textContent = "BLEND";
-      blendMessage.textContent = "You were busted — watch the round";
+      blendMessage.textContent = "You were busted - watch the round";
       return;
     }
     const liftRemaining = this.liftLockedUntil - performance.now();

@@ -5,8 +5,30 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no, interactive-widget=resizes-content" />
     <meta name="theme-color" content="#11104a" />
     <title>Blend in or Bust</title>
+    <style id="boot-critical-styles">
+      html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #080727; }
+      html:not(.app-ready) #app, html:not(.app-ready) #sound-toggle { visibility: hidden; }
+      #boot-loading {
+        position: fixed; inset: 0; z-index: 99999; display: grid; place-items: center;
+        padding: 24px; color: #fff; background: radial-gradient(circle at 50% 35%, #28239a 0, #100b4a 42%, #06051f 100%);
+        font-family: Inter, ui-rounded, "Trebuchet MS", system-ui, sans-serif; text-align: center;
+      }
+      #boot-loading .boot-card { width: min(440px, calc(100vw - 40px)); padding: 24px; border: 2px solid rgba(112,239,255,.7); border-radius: 22px; background: rgba(10,8,55,.88); }
+      #boot-loading strong { display: block; margin-bottom: 8px; color: #baff36; font-size: clamp(24px, 6vw, 42px); }
+      #boot-loading span { display: block; font-size: 16px; line-height: 1.4; }
+      #boot-loading .boot-spinner { width: 42px; height: 42px; margin: 20px auto 0; border: 5px solid rgba(255,255,255,.2); border-top-color: #67f2ff; border-radius: 50%; animation: boot-spin .8s linear infinite; }
+      html.app-ready #boot-loading { display: none; }
+      @keyframes boot-spin { to { transform: rotate(360deg); } }
+    </style>
   </head>
   <body>
+    <div id="boot-loading" role="status" aria-live="polite">
+      <div class="boot-card">
+        <strong>BLEND IN OR BUST</strong>
+        <span id="boot-loading-message">Loading the museum...</span>
+        <div class="boot-spinner" aria-hidden="true"></div>
+      </div>
+    </div>
     <div id="app">
       <section id="title-screen" class="screen title-screen">
         <div class="login-card" aria-label="Game sign in">
@@ -23,7 +45,7 @@
             <button id="join-button">JOIN GAME</button>
           </div>
           <button id="practice-button" class="practice">EXPLORE MIDNIGHT MUSEUM</button>
-          <p id="form-message" role="status">Movement prototype • Keyboard, mouse and touch ready</p>
+          <p id="form-message" role="status">Movement prototype - Keyboard, mouse and touch ready</p>
         </div>
       </section>
 
@@ -61,8 +83,8 @@
               <span>TESTING BOTS</span>
               <select id="bots-enabled">
                 <option value="off" selected>Off</option>
-                <option value="on">On — add 8 bots</option>
-                <option value="balanced">On — split 2 human roles</option>
+                <option value="on">On - add 8 bots</option>
+                <option value="balanced">On - split 2 human roles</option>
               </select>
             </label>
           </div>
@@ -75,19 +97,26 @@
 
       <section id="game-screen" class="screen game-screen hidden">
         <canvas id="game-canvas" aria-label="Blend in or Bust 3D arena"></canvas>
+        <div id="scene-loading" class="scene-loading hidden" role="status" aria-live="polite">
+          <div class="scene-loading-card">
+            <strong>LOADING MUSEUM</strong>
+            <span id="scene-loading-message">Loading rooms, artwork, sounds and props...</span>
+            <div class="scene-loading-spinner" aria-hidden="true"></div>
+          </div>
+        </div>
         <header class="hud-top">
-          <button id="back-button" class="icon-button" aria-label="Return to title">←</button>
+          <button id="back-button" class="icon-button" aria-label="Return to title">&lt;</button>
           <div class="status-pill arena-status">
             <strong id="arena-title">MIDNIGHT MUSEUM</strong>
             <span id="arena-subtitle">Hide. Deceive. Survive.</span>
           </div>
           <div class="status-pill players">
-            <strong id="players-counter">● 0 ACTIVE</strong>
+            <strong id="players-counter">0 ACTIVE</strong>
             <span id="busted-counter">0 busted</span>
           </div>
           <div class="status-pill flags">
-            <strong id="flags-counter">⚑ 0 / 0</strong>
-            <span id="rubbish-counter">🗑 0 left</span>
+            <strong id="flags-counter">FLAGS 0 / 0</strong>
+            <span id="rubbish-counter">0 RUBBISH LEFT</span>
           </div>
           <div class="status-pill timer">
             <strong id="round-timer">--:--</strong>
@@ -133,7 +162,7 @@
         </button>
         <div id="busted-banner" class="busted-banner hidden">
           <strong>BUSTED!</strong>
-          <span>Silent spectator — watch, but do not reveal who you suspect.</span>
+          <span>Silent spectator - watch, but do not reveal who you suspect.</span>
         </div>
         <div id="spectator-badge" class="spectator-badge hidden">
           <span>SECURITY CAMERA</span>
@@ -141,12 +170,12 @@
           <small id="spectator-room-count">ROOM 13 OF 25</small>
         </div>
         <div id="spectator-controls" class="spectator-controls hidden" aria-label="Security camera room controls">
-          <button id="spectator-prev-room" type="button" aria-label="Previous room">◀</button>
+          <button id="spectator-prev-room" type="button" aria-label="Previous room">&lt;</button>
           <span>SWITCH ROOM</span>
-          <button id="spectator-next-room" type="button" aria-label="Next room">▶</button>
+          <button id="spectator-next-room" type="button" aria-label="Next room">&gt;</button>
         </div>
         <div id="security-camera-effect" class="security-camera-effect hidden" aria-hidden="true">
-          <span class="security-rec">● REC</span>
+          <span class="security-rec">REC</span>
           <span class="security-channel">CAM 13</span>
         </div>
         <section id="privacy-blackout" class="privacy-blackout hidden">
@@ -195,9 +224,9 @@
       </section>
     </div>
     <button id="sound-toggle" class="sound-toggle" type="button" aria-label="Mute background music">
-      <span aria-hidden="true">🔊</span>
+      <span aria-hidden="true">ON</span>
       <strong>MUSIC ON</strong>
     </button>
-    <script type="module" src="/src/main.ts"></script>
+    <script type="module" src="./src/main.ts"></script>
   </body>
 </html>
