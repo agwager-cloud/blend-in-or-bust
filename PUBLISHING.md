@@ -1,5 +1,10 @@
-# Publishing Blend in or Bust v0.19.13
+# Publishing Blend in or Bust v0.19.14
 
+
+
+## Free Render wake behaviour
+
+The browser does not request `/health`. Host and Join use the real multiplayer connection and retry for up to 60 seconds while a free Render instance wakes. During that window the controls are disabled and the start screen shows an accurate countdown. Do not replace this with a browser health-check preflight.
 
 ## School-network connection rule
 
@@ -49,6 +54,6 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-itch.ps1 -RenderUrl "ht
 
 Upload:
 
-`release\Blend-in-or-Bust-v0.19.13-itch.zip`
+`release\Blend-in-or-Bust-v0.19.14-itch.zip`
 
 The build script verifies that `index.html` is at the root of the ZIP.

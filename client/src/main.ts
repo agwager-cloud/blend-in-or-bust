@@ -32,6 +32,9 @@ const canvas = document.querySelector<HTMLCanvasElement>("#game-canvas")!;
 const nameInput = document.querySelector<HTMLInputElement>("#player-name")!;
 const roomInput = document.querySelector<HTMLInputElement>("#room-code")!;
 const formMessage = document.querySelector<HTMLElement>("#form-message")!;
+const hostButton = document.querySelector<HTMLButtonElement>("#host-button")!;
+const joinButton = document.querySelector<HTMLButtonElement>("#join-button")!;
+const practiceButton = document.querySelector<HTMLButtonElement>("#practice-button")!;
 const playerLabel = document.querySelector<HTMLElement>("#player-label")!;
 const moveStick = document.querySelector<HTMLElement>("#move-stick")!;
 const stickKnob = moveStick.querySelector<HTMLElement>(".stick-knob")!;
@@ -104,6 +107,19 @@ let blenderTeammates = new Set<string>();
 let renderedMeetingNumber = -1;
 let submittedVote = "";
 let pendingSpectatorConcealment: string[] = [];
+let connectionInProgress = false;
+let connectionRequestId = 0;
+
+const SERVER_WAKE_WINDOW_MS = 60_000;
+const CONNECTION_ATTEMPT_TIMEOUT_MS = 14_000;
+const CONNECTION_RETRY_DELAY_MS = 1_250;
+
+type MultiplayerAction = "host" | "join";
+
+interface OpenedMultiplayerRoom {
+  client: Client;
+  room: Room<any>;
+}
 
 // Keep the original network role identifiers for compatibility, while every
 // player-facing screen uses the clearer Blend in or Bust names.
@@ -280,40 +296,171 @@ function getDeviceId(): string {
   return created;
 }
 
-async function connectMultiplayer(action: "host" | "join"): Promise<void> {
+function setConnectionControlsBusy(action: MultiplayerAction, busy: boolean): void {
+  hostButton.disabled = busy;
+  joinButton.disabled = busy;
+  practiceButton.disabled = busy;
+  hostButton.textContent = busy && action === "host" ? "CONNECTING..." : "HOST GAME";
+  joinButton.textContent = busy && action === "join" ? "CONNECTING..." : "JOIN GAME";
+}
+
+function updateServerWakeMessage(
+  action: MultiplayerAction,
+  deadline: number,
+  roomCode: string,
+): void {
+  const remainingSeconds = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+  const task = action === "host"
+    ? "creating your room"
+    : `finding room ${roomCode}`;
+  formMessage.textContent =
+    `FREE SERVER MAY BE ASLEEP — waking it now and ${task}. ` +
+    `Please wait; this can take up to 60 seconds. ${remainingSeconds}s remaining.`;
+}
+
+function wait(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
+function isTerminalConnectionError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /room not found|room full|24 players|24 participants|removed from this room|different name|already connected|other game tab|device could not be identified|invalid name|forbidden|unauthori[sz]ed|game is locked/i.test(message);
+}
+
+function formatConnectionError(error: unknown): string {
+  const message = error instanceof Error ? error.message : "Could not connect to the server.";
+  if (/full|24 players|24 participants/i.test(message)) {
+    return "ROOM FULL — this room already has 24 players. Please host a new room for the additional students.";
+  }
+  return message;
+}
+
+function openRoomWithTimeout(
+  action: MultiplayerAction,
+  name: string,
+  roomCode: string,
+  timeoutMs: number,
+): Promise<OpenedMultiplayerRoom> {
+  const client = new Client(serverUrl);
+  const abortController = new AbortController();
+  const operation = (async (): Promise<OpenedMultiplayerRoom> => {
+    if (action === "host") {
+      const room = await client.create("blend_room", { name, deviceId });
+      return { client, room };
+    }
+
+    const response = await fetch(`${httpServerUrl}/rooms/${roomCode}`, {
+      cache: "no-store",
+      signal: abortController.signal,
+    });
+    if (response.status === 404) throw new Error("Room not found. Check the five-digit code.");
+    if (!response.ok) throw new Error(`The server returned ${response.status} while finding the room.`);
+    const result = await response.json() as { roomId?: string };
+    if (!result.roomId) throw new Error("Room not found. Check the five-digit code.");
+    const room = await client.joinById(result.roomId, { name, deviceId });
+    return { client, room };
+  })();
+
+  return new Promise<OpenedMultiplayerRoom>((resolve, reject) => {
+    let finished = false;
+    const timeout = window.setTimeout(() => {
+      if (finished) return;
+      finished = true;
+      abortController.abort();
+      const error = new Error("The connection attempt timed out while the free server was waking.");
+      error.name = "ServerWakeAttemptTimeout";
+      reject(error);
+    }, timeoutMs);
+
+    operation.then((opened) => {
+      if (finished) {
+        void opened.room.leave(true);
+        return;
+      }
+      finished = true;
+      window.clearTimeout(timeout);
+      resolve(opened);
+    }).catch((error: unknown) => {
+      if (finished) return;
+      finished = true;
+      window.clearTimeout(timeout);
+      reject(error);
+    });
+  });
+}
+
+async function connectMultiplayer(action: MultiplayerAction): Promise<void> {
+  if (connectionInProgress) return;
   const name = validName();
   if (!name) return;
-  if (action === "join" && !/^\d{5}$/.test(roomInput.value.trim())) {
+  const roomCode = roomInput.value.trim();
+  if (action === "join" && !/^\d{5}$/.test(roomCode)) {
     formMessage.textContent = "Enter the 5-digit room code to join.";
     roomInput.focus();
     return;
   }
-  formMessage.textContent = action === "host" ? "Creating room..." : "Finding room...";
+
+  connectionInProgress = true;
+  const requestId = ++connectionRequestId;
+  const deadline = Date.now() + SERVER_WAKE_WINDOW_MS;
+  setConnectionControlsBusy(action, true);
+  updateServerWakeMessage(action, deadline, roomCode);
+  const statusTimer = window.setInterval(
+    () => updateServerWakeMessage(action, deadline, roomCode),
+    1_000,
+  );
+
+  let lastError: unknown;
   try {
-    const client = new Client(serverUrl);
-    let room: Room<any>;
-    if (action === "host") {
-      room = await client.create("blend_room", { name, deviceId });
-    } else {
-      const response = await fetch(`${httpServerUrl}/rooms/${roomInput.value.trim()}`);
-      if (!response.ok) throw new Error("Room not found. Check the five-digit code.");
-      const result = await response.json() as { roomId: string };
-      room = await client.joinById(result.roomId, { name, deviceId });
+    while (requestId === connectionRequestId && Date.now() < deadline) {
+      const remainingMs = deadline - Date.now();
+      try {
+        const opened = await openRoomWithTimeout(
+          action,
+          name,
+          roomCode,
+          Math.max(1_000, Math.min(CONNECTION_ATTEMPT_TIMEOUT_MS, remainingMs)),
+        );
+        if (requestId !== connectionRequestId) {
+          void opened.room.leave(true);
+          return;
+        }
+
+        activeRoom = opened.room;
+        bindRoom(opened.room, opened.client);
+        titleScreen.classList.add("hidden");
+        lobbyScreen.classList.remove("hidden");
+        updateLobby();
+        if (["reveal", "game", "discussion", "voting", "verdict", "results"]
+          .includes(String(opened.room.state.phase))) {
+          void enterMultiplayerArena(opened.room);
+        }
+        return;
+      } catch (error) {
+        lastError = error;
+        if (isTerminalConnectionError(error)) throw error;
+        const retryDelay = Math.min(CONNECTION_RETRY_DELAY_MS, deadline - Date.now());
+        if (retryDelay > 0) await wait(retryDelay);
+      }
     }
-    activeRoom = room;
-    bindRoom(room, client);
-    titleScreen.classList.add("hidden");
-    lobbyScreen.classList.remove("hidden");
-    updateLobby();
-    if (["reveal", "game", "discussion", "voting", "verdict", "results"]
-      .includes(String(room.state.phase))) {
-      void enterMultiplayerArena(room);
+
+    if (requestId === connectionRequestId) {
+      const finalDetail = lastError instanceof Error && lastError.name !== "ServerWakeAttemptTimeout"
+        ? ` Last response: ${lastError.message}`
+        : "";
+      throw new Error(
+        "SERVER DID NOT RESPOND WITHIN 60 SECONDS — the free server may still be waking. " +
+        `Press Host or Join to try again.${finalDetail}`,
+      );
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Could not connect to the server.";
-    formMessage.textContent = /full|24 players|24 participants|locked/i.test(message)
-      ? "ROOM FULL — this room already has 24 players. Please host a new room for the additional students."
-      : message;
+    if (requestId === connectionRequestId) formMessage.textContent = formatConnectionError(error);
+  } finally {
+    window.clearInterval(statusTimer);
+    if (requestId === connectionRequestId) {
+      connectionInProgress = false;
+      setConnectionControlsBusy(action, false);
+    }
   }
 }
 
@@ -650,9 +797,9 @@ async function enterPractice(): Promise<void> {
   }
 }
 
-document.querySelector("#host-button")!.addEventListener("click", () => void connectMultiplayer("host"));
-document.querySelector("#join-button")!.addEventListener("click", () => void connectMultiplayer("join"));
-document.querySelector("#practice-button")!.addEventListener("click", enterPractice);
+hostButton.addEventListener("click", () => void connectMultiplayer("host"));
+joinButton.addEventListener("click", () => void connectMultiplayer("join"));
+practiceButton.addEventListener("click", enterPractice);
 document.querySelector("#back-button")!.addEventListener("click", () => {
   if (activeRoom) {
     leaveRoom(true);

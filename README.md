@@ -5,6 +5,16 @@
 Starter project for a responsive browser-based 3D multiplayer game.
 
 
+## Version 0.19.14 — 60-Second Render Wake Connection
+
+- Host and Join now keep retrying through a full 60-second free-Render wake window instead of failing on the first short matchmaking or WebSocket timeout.
+- The start screen shows an accurate seconds-remaining message explaining that the free server may be asleep and is being woken through the normal game connection.
+- Host, Join and local Explore buttons are disabled while a multiplayer connection is in progress, preventing duplicate rooms and overlapping attempts.
+- Short failed attempts are retried automatically; only permanent errors such as room full, room not found, removed name or duplicate device are shown immediately.
+- After 60 seconds, controls are restored with a clear message allowing the player to try again.
+- No browser `/health` request was added; the school-network-safe direct multiplayer connection remains unchanged.
+- Distributed as a changed-files-only hotfix without dependency installation or an npm build.
+
 ## Version 0.19.13 — School-network itch.io safeguard
 
 - Confirmed the browser client connects directly to the configured multiplayer server and does not request `/health`.

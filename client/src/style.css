@@ -1419,3 +1419,24 @@ select {
   }
 }
 
+
+/* v0.19.14: keep the title controls unambiguous while a sleeping Render
+   service is waking. The connection status remains readable on small phones. */
+.login-card button:disabled {
+  opacity: .52;
+  filter: grayscale(.45);
+  cursor: wait;
+  transform: none;
+  pointer-events: none;
+}
+
+.login-card button:disabled:hover,
+.login-card button:disabled:active {
+  filter: grayscale(.45);
+  transform: none;
+}
+
+#form-message {
+  min-height: 34px;
+  line-height: 1.35;
+}
