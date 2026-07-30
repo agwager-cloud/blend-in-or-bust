@@ -417,13 +417,16 @@ function wait(milliseconds: number): Promise<void> {
 
 function isTerminalConnectionError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error ?? "");
-  return /room not found|room full|24 players|24 participants|removed from this room|different name|already connected|other game tab|device could not be identified|invalid name|forbidden|unauthori[sz]ed|game is locked/i.test(message);
+  return /room not found|room full|24 players|24 participants|removed from this room|different name|player name is already|name is already being used|already connected|other game tab|device could not be identified|invalid name|forbidden|unauthori[sz]ed|game is locked/i.test(message);
 }
 
 function formatConnectionError(error: unknown): string {
   const message = error instanceof Error ? error.message : "Could not connect to the server.";
   if (/full|24 players|24 participants/i.test(message)) {
     return "ROOM FULL - this room already has 24 players. Please host a new room for the additional students.";
+  }
+  if (/player name is already|name is already being used/i.test(message)) {
+    return "NAME ALREADY TAKEN - another player in this room is using that name. Enter a different name and try again.";
   }
   return message;
 }

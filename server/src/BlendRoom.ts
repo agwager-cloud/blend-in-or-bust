@@ -43,6 +43,10 @@ export class BlendRoom extends Room<GameState> {
   // Reserve a device during authentication so two tabs attempting to join at
   // the same moment cannot both pass before onJoin records the first session.
   private deviceReservations = new Map<string, { sessionId: string; expiresAt: number }>();
+  // Reserve a cleaned, case-insensitive player name during authentication so
+  // two devices submitting the same name at nearly the same moment cannot both
+  // enter before the first onJoin callback adds its player to room state.
+  private nameReservations = new Map<string, { sessionId: string; expiresAt: number }>();
   private sessionDevices = new Map<string, string>();
   // Names removed by the host stay blocked for the lifetime of this room.
   // Players may rejoin only after choosing a genuinely different name.
@@ -358,23 +362,40 @@ export class BlendRoom extends Room<GameState> {
     if (!deviceId) throw new ServerError(400, "This device could not be identified.");
 
     const now = Date.now();
-    this.pruneDeviceReservations(now);
+    this.pruneJoinReservations(now);
+
+    const joinNameKey = this.joinNameKey(name);
+    const nameInUse = [...this.state.players.entries()].some(([sessionId, player]) =>
+      sessionId !== client.sessionId && this.joinNameKey(player.name) === joinNameKey);
+    const nameReservation = this.nameReservations.get(joinNameKey);
+    if (nameInUse || (nameReservation && nameReservation.sessionId !== client.sessionId)) {
+      throw new ServerError(
+        409,
+        "That player name is already being used in this room. Enter a different name.",
+      );
+    }
+
     const existing = this.deviceSessions.get(deviceId);
-    const reservation = this.deviceReservations.get(deviceId);
+    const deviceReservation = this.deviceReservations.get(deviceId);
     if ((existing && existing !== client.sessionId)
-      || (reservation && reservation.sessionId !== client.sessionId)) {
+      || (deviceReservation && deviceReservation.sessionId !== client.sessionId)) {
       throw new ServerError(
         409,
         "This device is already connected to this room. Close the other game tab or leave that account before joining again.",
       );
     }
 
-    // Claim the device here, not later in onJoin. Colyseus may authenticate two
-    // near-simultaneous tabs before either onJoin callback runs; this temporary
-    // reservation makes the one-device/one-account rule atomic.
+    // Claim both the device and name here, not later in onJoin. Colyseus may
+    // authenticate near-simultaneous joins before either onJoin callback runs;
+    // these temporary reservations make both uniqueness rules atomic.
+    const expiresAt = now + 15_000;
     this.deviceReservations.set(deviceId, {
       sessionId: client.sessionId,
-      expiresAt: now + 15_000,
+      expiresAt,
+    });
+    this.nameReservations.set(joinNameKey, {
+      sessionId: client.sessionId,
+      expiresAt,
     });
     options.deviceId = deviceId;
     options.name = name;
@@ -409,6 +430,10 @@ export class BlendRoom extends Room<GameState> {
     this.state.players.set(client.sessionId, player);
     const deviceId = options.deviceId!;
     this.deviceReservations.delete(deviceId);
+    const joinNameKey = this.joinNameKey(player.name);
+    if (this.nameReservations.get(joinNameKey)?.sessionId === client.sessionId) {
+      this.nameReservations.delete(joinNameKey);
+    }
     this.deviceSessions.set(deviceId, client.sessionId);
     this.sessionDevices.set(client.sessionId, deviceId);
     client.send("room-info", { roomCode: this.roomCode });
@@ -2056,9 +2081,12 @@ export class BlendRoom extends Room<GameState> {
   }
 
 
-  private pruneDeviceReservations(now = Date.now()): void {
+  private pruneJoinReservations(now = Date.now()): void {
     for (const [deviceId, reservation] of this.deviceReservations) {
       if (reservation.expiresAt <= now) this.deviceReservations.delete(deviceId);
+    }
+    for (const [nameKey, reservation] of this.nameReservations) {
+      if (reservation.expiresAt <= now) this.nameReservations.delete(nameKey);
     }
   }
 
@@ -2071,6 +2099,13 @@ export class BlendRoom extends Room<GameState> {
     for (const [reservedDeviceId, reservation] of this.deviceReservations) {
       if (reservation.sessionId === sessionId) this.deviceReservations.delete(reservedDeviceId);
     }
+    for (const [reservedNameKey, reservation] of this.nameReservations) {
+      if (reservation.sessionId === sessionId) this.nameReservations.delete(reservedNameKey);
+    }
+  }
+
+  private joinNameKey(value: string): string {
+    return value.normalize("NFKC").toLocaleLowerCase("en-US");
   }
 
   private nameKey(value: string): string {
