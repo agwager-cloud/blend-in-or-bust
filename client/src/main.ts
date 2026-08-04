@@ -153,7 +153,12 @@ let arenaEntryRoom: Room<any> | undefined;
 let museumLoadPromise: Promise<PracticeGame> | undefined;
 let roleAcknowledgedForRound = true;
 let roleReadySentForRound = false;
+let roleAutoContinueAt = 0;
+let roleAutoContinueInterval: number | undefined;
+let roleAutoContinueTimeout: number | undefined;
+let awaitingLoadingPhaseAfterRoleMessage = false;
 
+const ROLE_AUTO_CONTINUE_FALLBACK_MS = 12_000;
 const SERVER_WAKE_WINDOW_MS = 60_000;
 const CONNECTION_ATTEMPT_TIMEOUT_MS = 14_000;
 const CONNECTION_RETRY_DELAY_MS = 1_250;
@@ -275,6 +280,43 @@ window.addEventListener("orientationchange", () => {
   window.setTimeout(restoreLockedViewport, 320);
 });
 
+const SOUND_MUTED_STORAGE_KEY = "blend-sound-muted";
+const LEGACY_MUSIC_MUTED_STORAGE_KEY = "blend-music-muted";
+const storedSoundPreference = localStorage.getItem(SOUND_MUTED_STORAGE_KEY);
+let soundMuted = storedSoundPreference === null
+  ? localStorage.getItem(LEGACY_MUSIC_MUTED_STORAGE_KEY) === "true"
+  : storedSoundPreference === "true";
+const activeSoundEffects = new Set<HTMLAudioElement>();
+
+function setSoundMutedPreference(muted: boolean): void {
+  soundMuted = muted;
+  localStorage.setItem(SOUND_MUTED_STORAGE_KEY, String(muted));
+  // Keep the legacy key in sync so older builds preserve the same preference.
+  localStorage.setItem(LEGACY_MUSIC_MUTED_STORAGE_KEY, String(muted));
+  if (!muted) return;
+  activeSoundEffects.forEach((audio) => {
+    audio.pause();
+    audio.currentTime = 0;
+  });
+  activeSoundEffects.clear();
+}
+
+function playSoundEffectElement(audio: HTMLAudioElement, volume: number): void {
+  if (soundMuted) return;
+  audio.pause();
+  audio.currentTime = 0;
+  audio.volume = volume;
+  audio.muted = false;
+  activeSoundEffects.add(audio);
+  const release = () => activeSoundEffects.delete(audio);
+  audio.onended = release;
+  void audio.play().catch(release);
+}
+
+function playSoundEffect(source: string, volume: number): void {
+  playSoundEffectElement(new Audio(source), volume);
+}
+
 class BackgroundMusic {
   private readonly tracks = [
     assetUrl("assets/music/leberch-landscape-history-255440.mp3"),
@@ -287,7 +329,7 @@ class BackgroundMusic {
   private lastTrack = "";
   private started = false;
   private meetingActive = false;
-  private muted = localStorage.getItem("blend-music-muted") === "true";
+  private muted = soundMuted;
   private readonly audio = new Audio();
   private readonly meetingAudio = new Audio(assetUrl("assets/music/leberch-dark-history-262605.mp3"));
 
@@ -312,7 +354,7 @@ class BackgroundMusic {
       event.stopPropagation();
       this.started = true;
       this.muted = !this.muted;
-      localStorage.setItem("blend-music-muted", String(this.muted));
+      setSoundMutedPreference(this.muted);
       this.audio.muted = this.muted;
       this.meetingAudio.muted = this.muted;
       if (!this.muted && this.meetingActive) {
@@ -362,8 +404,8 @@ class BackgroundMusic {
 
   private syncButton(): void {
     soundToggle.querySelector("span")!.textContent = this.muted ? "OFF" : "ON";
-    soundToggle.querySelector("strong")!.textContent = this.muted ? "MUSIC OFF" : "MUSIC ON";
-    soundToggle.setAttribute("aria-label", this.muted ? "Play background music" : "Mute background music");
+    soundToggle.querySelector("strong")!.textContent = this.muted ? "SOUND OFF" : "SOUND ON";
+    soundToggle.setAttribute("aria-label", this.muted ? "Turn on all sound" : "Mute all sound");
     soundToggle.classList.toggle("muted", this.muted);
   }
 }
@@ -570,18 +612,25 @@ function bindRoom(room: Room<any>, client: Client): void {
   });
   room.onMessage("role", ({
     role,
+    autoContinueAt,
     blenderTeammates: teammateIds = [],
   }: {
     role: "seeker" | "blender";
+    autoContinueAt?: number;
     blenderTeammates?: string[];
   }) => {
     if (!isCurrentRoom(room)) return;
     localRole = role;
+    // Colyseus direct messages can arrive just before the matching state patch.
+    // Busters are sent first, so their role message was more likely to be
+    // followed by one final stale lobby snapshot that cleared the countdown.
+    // Keep this role active until the loading-phase state arrives.
+    awaitingLoadingPhaseAfterRoleMessage = true;
     roleAcknowledgedForRound = false;
     roleReadySentForRound = false;
     blenderTeammates = new Set(teammateIds);
     game?.resetForRound();
-    updateRoleReveal();
+    beginRoleAcknowledgementWindow(autoContinueAt);
     roleReveal.classList.add("role-reveal-priority");
     roleReveal.classList.remove("hidden");
   });
@@ -795,8 +844,72 @@ function updateRoleReveal(): void {
     ? "You cannot collect flags or rubbish. Disguise yourself, deceive the Blenders and Bust them before they complete the museum objectives."
     : "Find every hidden flag, clean up the rubbish, survive the Busters and report crime scenes.";
   revealCard.classList.toggle("buster", buster);
-  revealCountdown.textContent = "Read your role carefully before continuing.";
   roleContinueButton.disabled = false;
+  updateRoleAutoContinueMessage();
+}
+
+function clearRoleAcknowledgementTimer(): void {
+  if (roleAutoContinueInterval !== undefined) {
+    window.clearInterval(roleAutoContinueInterval);
+    roleAutoContinueInterval = undefined;
+  }
+  if (roleAutoContinueTimeout !== undefined) {
+    window.clearTimeout(roleAutoContinueTimeout);
+    roleAutoContinueTimeout = undefined;
+  }
+  roleAutoContinueAt = 0;
+  roleContinueButton.textContent = "I UNDERSTAND - CONTINUE";
+}
+
+function updateRoleAutoContinueMessage(): void {
+  if (roleAcknowledgedForRound || roleAutoContinueAt <= 0) {
+    revealCountdown.textContent = "Read your role carefully before continuing.";
+    roleContinueButton.textContent = "I UNDERSTAND - CONTINUE";
+    return;
+  }
+  const seconds = Math.max(0, Math.ceil((roleAutoContinueAt - Date.now()) / 1000));
+  revealCountdown.textContent = seconds > 0
+    ? `The game continues automatically in ${seconds} second${seconds === 1 ? "" : "s"}.`
+    : "Continuing automatically...";
+  roleContinueButton.textContent = seconds > 0
+    ? `I UNDERSTAND - CONTINUE (${seconds})`
+    : "CONTINUING...";
+}
+
+function beginRoleAcknowledgementWindow(serverDeadline: unknown): void {
+  clearRoleAcknowledgementTimer();
+  const parsedDeadline = Number(serverDeadline);
+  roleAutoContinueAt = Number.isFinite(parsedDeadline) && parsedDeadline > Date.now()
+    ? parsedDeadline
+    : Date.now() + ROLE_AUTO_CONTINUE_FALLBACK_MS;
+  updateRoleReveal();
+  roleAutoContinueInterval = window.setInterval(() => {
+    updateRoleAutoContinueMessage();
+    if (Date.now() >= roleAutoContinueAt) acknowledgeCurrentRole();
+  }, 200);
+  // A separate one-shot fallback prevents browser timer throttling or a missed
+  // interval tick from leaving either role at the acknowledgement screen.
+  roleAutoContinueTimeout = window.setTimeout(
+    () => acknowledgeCurrentRole(),
+    Math.max(0, roleAutoContinueAt - Date.now()) + 40,
+  );
+}
+
+function acknowledgeCurrentRole(showWaitingMessage = true): void {
+  if (roleAcknowledgedForRound) return;
+  roleAcknowledgedForRound = true;
+  if (!roleReadySentForRound && activeRoom) {
+    roleReadySentForRound = true;
+    safeRoomSend(activeRoom, "role-ready");
+  }
+  clearRoleAcknowledgementTimer();
+  roleReveal.classList.add("hidden");
+  roleReveal.classList.remove("role-reveal-priority");
+  if (showWaitingMessage && activeRoom?.state?.phase === "loading") {
+    showSceneLoading(game
+      ? "Role confirmed. Waiting for the other players..."
+      : "Role confirmed. Loading the museum...");
+  }
 }
 
 function updateMatchScreens(room: Room<any>): void {
@@ -807,7 +920,25 @@ function updateMatchScreens(room: Room<any>): void {
   const local = players.get(room.sessionId);
   const lateSpectator = Boolean(local?.isLateSpectator);
   const hasPrivateRole = localRole === "seeker" || localRole === "blender";
-  const shouldShowRole = !lateSpectator && hasPrivateRole && !roleAcknowledgedForRound;
+
+  // Direct role messages may beat the loading-phase state patch. Because the
+  // server sends Busters first, they were the role most often hit by a final
+  // stale lobby snapshot. Do not let that old snapshot erase the role timer,
+  // role value or card. The next loading/reveal/game patch is authoritative.
+  if (phase === "lobby" && awaitingLoadingPhaseAfterRoleMessage) {
+    const keepRoleVisible = !lateSpectator && hasPrivateRole && !roleAcknowledgedForRound;
+    roleReveal.classList.toggle("hidden", !keepRoleVisible);
+    roleReveal.classList.toggle("role-reveal-priority", keepRoleVisible);
+    return;
+  }
+  if (phase !== "lobby" && awaitingLoadingPhaseAfterRoleMessage) {
+    awaitingLoadingPhaseAfterRoleMessage = false;
+  }
+  if (!lateSpectator && hasPrivateRole && !roleAcknowledgedForRound && phase !== "loading") {
+    acknowledgeCurrentRole(false);
+  }
+  const shouldShowRole = phase === "loading"
+    && !lateSpectator && hasPrivateRole && !roleAcknowledgedForRound;
   roleReveal.classList.toggle("hidden", !shouldShowRole);
   roleReveal.classList.toggle("role-reveal-priority", shouldShowRole);
   resultsOverlay.classList.toggle("hidden", phase !== "results");
@@ -846,8 +977,10 @@ function updateMatchScreens(room: Room<any>): void {
     gameScreen.classList.add("hidden");
     lobbyScreen.classList.remove("hidden");
     localRole = "practice";
+    awaitingLoadingPhaseAfterRoleMessage = false;
     roleAcknowledgedForRound = true;
     roleReadySentForRound = false;
+    clearRoleAcknowledgementTimer();
     updateLobby();
   }
 }
@@ -917,20 +1050,7 @@ function submitVote(targetId: string): void {
 
 skipVoteButton.addEventListener("click", () => submitVote("skip"));
 
-roleContinueButton.addEventListener("click", () => {
-  roleAcknowledgedForRound = true;
-  if (!roleReadySentForRound && activeRoom) {
-    roleReadySentForRound = true;
-    safeRoomSend(activeRoom, "role-ready");
-  }
-  roleReveal.classList.add("hidden");
-  roleReveal.classList.remove("role-reveal-priority");
-  if (activeRoom?.state?.phase === "loading") {
-    showSceneLoading(game
-      ? "Role confirmed. Waiting for the other players..."
-      : "Role confirmed. Loading the museum...");
-  }
-});
+roleContinueButton.addEventListener("click", () => acknowledgeCurrentRole());
 
 function showSceneLoading(message: string): void {
   sceneLoadingMessage.textContent = message;
@@ -1101,6 +1221,8 @@ function leaveRoom(consented: boolean, message = "You left the room."): void {
   hideSceneLoading();
   roleAcknowledgedForRound = true;
   roleReadySentForRound = false;
+  awaitingLoadingPhaseAfterRoleMessage = false;
+  clearRoleAcknowledgementTimer();
   roleReveal.classList.add("hidden");
   roleReveal.classList.remove("role-reveal-priority");
   const room = activeRoom;
@@ -2992,11 +3114,7 @@ class PracticeGame {
     const now = performance.now();
     if (now - this.lastCrimeAlertAt < 1_500) return;
     this.lastCrimeAlertAt = now;
-    this.crimeRoomAudio.pause();
-    this.crimeRoomAudio.currentTime = 0;
-    void this.crimeRoomAudio.play().catch(() => {
-      // Gameplay audio can be blocked until the browser has received a gesture.
-    });
+    playSoundEffectElement(this.crimeRoomAudio, 1);
   }
 
   private createCrimeMarker(id: string, x: number, z: number): TransformNode {
@@ -3388,9 +3506,7 @@ class PracticeGame {
       flag.dispose();
     });
     if (!collected) return;
-    const sound = new Audio(assetUrl("assets/flag.mp3"));
-    sound.volume = 0.9;
-    void sound.play().catch(() => undefined);
+    playSoundEffect(assetUrl("assets/flag.mp3"), 0.9);
   }
 
   private showFlagFoundCelebration(): void {
@@ -3456,11 +3572,7 @@ class PracticeGame {
   }
 
   private playPopSound(): void {
-    const sound = new Audio(assetUrl("assets/bust.mp3"));
-    sound.volume = 0.82;
-    void sound.play().catch(() => {
-      // Some browsers may still require a prior touch before playing audio.
-    });
+    playSoundEffect(assetUrl("assets/bust.mp3"), 0.82);
   }
 
   private createBurstFragments(origin: Vector3): void {

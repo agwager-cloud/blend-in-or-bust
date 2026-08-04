@@ -1,0 +1,23 @@
+Blend in or Bust v0.19.27 - Buster Role Countdown Hotfix
+
+FIXED
+- Busters now receive the same visible 12-second role countdown as Blenders.
+- A Colyseus message/state ordering race could let the Buster role message arrive just before one final stale lobby snapshot. Because Busters are sent first, that stale snapshot could clear only their countdown timer.
+- The client now preserves the private role, countdown and role card until the authoritative loading-phase state arrives.
+- A separate one-shot client timer backs up the visible countdown interval.
+- The server now schedules its own authoritative 12-second role-gate release for both roles. It does not rely on a student pressing Continue or on a client timer firing.
+- The museum still waits for active devices to finish loading, but no Blender or Buster can deliberately hold the class at the role confirmation screen.
+
+SOUND
+- The v0.19.26 sound-toggle fix is retained unchanged.
+
+VERSION
+- Updated project and itch build helper version to v0.19.27.
+
+CHANGED FILES
+- client/src/main.ts
+- server/src/BlendRoom.ts
+- package.json
+- package-lock.json
+- scripts/build-itch.ps1
+- FIX_ITCH_UPLOAD.bat

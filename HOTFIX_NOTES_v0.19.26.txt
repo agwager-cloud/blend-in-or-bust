@@ -1,0 +1,29 @@
+Blend in or Bust v0.19.26 - Role Gate and Sound Toggle Hotfix
+
+ROLE SCREEN
+- Players still receive 12 seconds to read their private Blender or Buster role.
+- The role card and Continue button now show a visible automatic countdown.
+- Pressing Continue still confirms immediately.
+- After 12 seconds, the server releases the role-confirmation gate automatically.
+- A student who refuses to press Continue can no longer hold the whole class in Loading Museum.
+- The server still waits for each active player's museum to finish loading, protecting slower devices from losing game time behind a loading screen.
+
+SOUND TOGGLE
+- Restored pointer/click input to the sound button while it is inside the in-game HUD.
+- The button now clearly displays SOUND ON / SOUND OFF.
+- The saved sound preference is retained on the device.
+- Muting now applies to background music, meeting music, flag sounds, Bust sounds and crime-scene alert sounds.
+- Sound effects already playing are stopped when sound is muted.
+
+VERSION
+- Updated project and itch build helper version to v0.19.26.
+
+CHANGED FILES
+- client/index.html
+- client/src/main.ts
+- client/src/style.css
+- server/src/BlendRoom.ts
+- package.json
+- package-lock.json
+- scripts/build-itch.ps1
+- FIX_ITCH_UPLOAD.bat

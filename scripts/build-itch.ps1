@@ -1,6 +1,6 @@
 param(
     [string]$RenderUrl = "https://blend-in-or-bust-server.onrender.com",
-    [string]$Version = "0.19.24"
+    [string]$Version = "0.19.27"
 )
 
 $ErrorActionPreference = "Stop"

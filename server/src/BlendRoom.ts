@@ -80,13 +80,14 @@ export class BlendRoom extends Room<GameState> {
   // Blender and reset the 2.4-second Bust preparation forever.
   private botPursuitLocks = new Map<string, { targetId: string; lockedUntil: number }>();
   private postMeetingMoveBlockedUntil = 0;
-  // A round does not begin until every active human has both loaded the 3D
-  // museum and acknowledged their private role. This prevents the timer from
-  // expiring behind a loading screen and guarantees the host can move when the
-  // arena becomes visible.
+  // A round waits for every active human to load the 3D museum. Players may
+  // confirm their role early, but a fixed server-side grace period prevents one
+  // student from holding the whole class at the role screen indefinitely.
   private roundReadyClients = new Set<string>();
   private roleReadyClients = new Set<string>();
+  private roleAcknowledgementDeadline = 0;
   private roundLoadingDeadline = 0;
+  private static readonly ROLE_ACKNOWLEDGEMENT_GRACE_MS = 12_000;
   private static readonly ROUND_LOADING_TIMEOUT_MS = 120_000;
   private static readonly SYNCHRONIZED_REVEAL_MS = 4_000;
 
@@ -553,6 +554,7 @@ export class BlendRoom extends Room<GameState> {
     this.botPursuitLocks.clear();
     this.roundReadyClients.clear();
     this.roleReadyClients.clear();
+    this.roleAcknowledgementDeadline = 0;
     this.roundLoadingDeadline = 0;
     this.votes.clear();
     this.roundSpawns.clear();
@@ -663,21 +665,35 @@ export class BlendRoom extends Room<GameState> {
     this.state.revealSecondsRemaining = 0;
     this.state.roundSecondsRemaining = this.state.roundSeconds;
     this.state.meetingSecondsRemaining = 0;
-    this.roundLoadingDeadline = Date.now() + BlendRoom.ROUND_LOADING_TIMEOUT_MS;
+    const loadingStartedAt = Date.now();
+    this.roleAcknowledgementDeadline = loadingStartedAt + BlendRoom.ROLE_ACKNOWLEDGEMENT_GRACE_MS;
+    this.roundLoadingDeadline = loadingStartedAt + BlendRoom.ROUND_LOADING_TIMEOUT_MS;
 
     // Send private roles only after the authoritative loading phase is active.
-    // Players may acknowledge immediately while their museum continues loading;
-    // the timer will not begin until both acknowledgements are complete.
+    // Players may acknowledge immediately, while the server automatically
+    // releases the role gate after the grace period even if someone refuses to
+    // press the button.
     shuffled.forEach((sessionId) => {
       const role = this.roles.get(sessionId)!;
       this.clients.find((client) => client.sessionId === sessionId)?.send("role", {
         role,
         blenderCount,
+        autoContinueAt: this.roleAcknowledgementDeadline,
         blenderTeammates: role === "blender"
           ? shuffled.slice(0, blenderCount).filter((id) => id !== sessionId)
           : [],
       });
     });
+
+    // One authoritative server timer releases the role gate for both roles.
+    // This does not depend on any client countdown, button press or later
+    // network message, so a deliberately idle Buster can never stall a class.
+    const scheduledRoleDeadline = this.roleAcknowledgementDeadline;
+    this.clock.setTimeout(() => {
+      if (this.state.phase !== "loading") return;
+      if (this.roleAcknowledgementDeadline !== scheduledRoleDeadline) return;
+      this.tryBeginSynchronizedReveal(Date.now());
+    }, BlendRoom.ROLE_ACKNOWLEDGEMENT_GRACE_MS + 50);
   }
 
   private activeHumanSessionIds(): string[] {
@@ -690,8 +706,10 @@ export class BlendRoom extends Room<GameState> {
     if (this.state.phase !== "loading") return;
     const humans = this.activeHumanSessionIds();
     if (humans.length === 0) return;
+    const roleGraceExpired = now >= this.roleAcknowledgementDeadline;
     const everyoneReady = humans.every((sessionId) =>
-      this.roundReadyClients.has(sessionId) && this.roleReadyClients.has(sessionId));
+      this.roundReadyClients.has(sessionId)
+      && (this.roleReadyClients.has(sessionId) || roleGraceExpired));
     if (!everyoneReady && now < this.roundLoadingDeadline) return;
     this.beginSynchronizedReveal(now);
   }
@@ -1135,6 +1153,7 @@ export class BlendRoom extends Room<GameState> {
     this.state.players.forEach((player) => { player.moving = false; });
     this.roundReadyClients.clear();
     this.roleReadyClients.clear();
+    this.roleAcknowledgementDeadline = 0;
     this.roundLoadingDeadline = 0;
   }
 
@@ -1152,6 +1171,7 @@ export class BlendRoom extends Room<GameState> {
     this.botPursuitLocks.clear();
     this.roundReadyClients.clear();
     this.roleReadyClients.clear();
+    this.roleAcknowledgementDeadline = 0;
     this.roundLoadingDeadline = 0;
     this.state.flags.clear();
     this.state.rubbish.clear();
