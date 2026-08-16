@@ -196,6 +196,12 @@ const SERVER_WAKE_WINDOW_MS = 60_000;
 const CONNECTION_ATTEMPT_TIMEOUT_MS = 14_000;
 const CONNECTION_RETRY_DELAY_MS = 1_250;
 const RECONNECT_RETRY_WINDOW_MS = 48_000;
+// A page refresh should not strand the user on the login screen for the full
+// server reconnection grace period when the old room/session no longer exists.
+// Ten seconds is long enough for the old socket to enter allowReconnection on
+// normal mobile/browser refreshes, while still returning control quickly after
+// a server redeploy or genuinely expired token.
+const REFRESH_RESTORE_WINDOW_MS = 10_000;
 const RECONNECT_RETRY_DELAY_MS = 1_000;
 
 type MultiplayerAction = "host" | "join";
@@ -618,8 +624,11 @@ function openRoomWithTimeout(
   });
 }
 
-async function reconnectRoomWithRetry(reconnectionToken: string): Promise<OpenedMultiplayerRoom> {
-  const deadline = Date.now() + RECONNECT_RETRY_WINDOW_MS;
+async function reconnectRoomWithRetry(
+  reconnectionToken: string,
+  retryWindowMs = RECONNECT_RETRY_WINDOW_MS,
+): Promise<OpenedMultiplayerRoom> {
+  const deadline = Date.now() + retryWindowMs;
   let stopped = false;
   let lastError: unknown;
 
@@ -658,7 +667,7 @@ async function reconnectRoomWithRetry(reconnectionToken: string): Promise<Opened
     window.setTimeout(() => {
       stopped = true;
       reject(new Error("Reconnect timed out."));
-    }, RECONNECT_RETRY_WINDOW_MS);
+    }, retryWindowMs);
   });
 
   return Promise.race([retryLoop(), timeout]);
@@ -679,7 +688,7 @@ async function restoreRoomAfterRefresh(): Promise<void> {
   formMessage.textContent = "RESTORING YOUR PREVIOUS GAME CONNECTION...";
 
   try {
-    const opened = await reconnectRoomWithRetry(stored.token);
+    const opened = await reconnectRoomWithRetry(stored.token, REFRESH_RESTORE_WINDOW_MS);
     if (requestId !== connectionRequestId) {
       void opened.room.leave(true);
       return;

@@ -1,0 +1,7 @@
+Blend In or Bust v0.20.3
+
+CLIENT-ONLY reconnect UX fix:
+- Page refresh restore attempts now time out after 10 seconds instead of using the full 48-second live disconnect recovery window.
+- Genuine unexpected mid-game connection drops still retain the longer reconnect window.
+- If a refresh token is stale because the old room/server instance has ended, the login screen becomes usable again promptly.
+- No server/Render changes are required for this update.

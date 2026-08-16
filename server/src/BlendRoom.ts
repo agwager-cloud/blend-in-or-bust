@@ -1353,40 +1353,45 @@ export class BlendRoom extends Room<GameState> {
     return positions;
   }
 
+  private objectiveBandForPlayers(players: number): number {
+    if (players <= 3) return 0;
+    if (players <= 5) return 1;
+    if (players <= 10) return 2;
+    if (players <= 15) return 3;
+    if (players <= 20) return 4;
+    return 5;
+  }
+
   private flagCountForPlayers(players: number, roundSeconds: number): number {
-    if (roundSeconds >= 600) {
-      if (players <= 3) return 5;
-      if (players <= 5) return 6;
-      if (players <= 10) return 8;
-      if (players <= 15) return 10;
-      if (players <= 20) return 12;
-      return 14;
-    }
-    if (players <= 3) return 3;
-    if (players <= 5) return 4;
-    if (players <= 10) return 5;
-    if (players <= 15) return 6;
-    if (players <= 20) return 7;
-    return 8;
+    const band = this.objectiveBandForPlayers(players);
+
+    // Balanced for the extra time cost of locating a hidden flag and solving its
+    // compulsory Maths challenge. Longer rounds increase the workload, but not
+    // linearly, because Blenders are progressively busted and late objectives
+    // become harder to locate.
+    const flagsByRound: Record<number, readonly number[]> = {
+      180: [2, 3, 3, 4, 5, 6],
+      240: [3, 3, 4, 5, 6, 7],
+      300: [3, 4, 5, 6, 7, 8],
+      600: [4, 5, 6, 8, 9, 10],
+    };
+
+    const round = [180, 240, 300, 600].includes(roundSeconds) ? roundSeconds : 240;
+    return flagsByRound[round][band];
   }
 
   private rubbishCountForPlayers(players: number, roundSeconds: number): number {
-    // Ten-minute rounds are designed for larger classes, so the museum contains
-    // substantially more cleanup without changing the density of short games.
-    if (roundSeconds >= 600) {
-      if (players <= 3) return 20;
-      if (players <= 5) return 26;
-      if (players <= 10) return 36;
-      if (players <= 15) return 42;
-      if (players <= 20) return 48;
-      return 54;
-    }
-    if (players <= 3) return 14;
-    if (players <= 5) return 18;
-    if (players <= 10) return 24;
-    if (players <= 15) return 28;
-    if (players <= 20) return 32;
-    return 36;
+    const band = this.objectiveBandForPlayers(players);
+
+    const rubbishByRound: Record<number, readonly number[]> = {
+      180: [8, 10, 14, 18, 22, 26],
+      240: [10, 14, 18, 22, 26, 30],
+      300: [12, 16, 22, 26, 30, 34],
+      600: [18, 22, 28, 34, 40, 44],
+    };
+
+    const round = [180, 240, 300, 600].includes(roundSeconds) ? roundSeconds : 240;
+    return rubbishByRound[round][band];
   }
 
   private finishRound(winner: "seekers" | "blenders"): void {
