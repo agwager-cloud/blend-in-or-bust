@@ -1,0 +1,10 @@
+Blend In or Bust v0.20.8
+
+Rubbish pickup identity privacy
+- Removed the on-screen message that announced which player/bot cleaned up rubbish.
+- Rubbish still visibly disappears in the 3D world when collected.
+- The rubbish counter still updates and animates.
+- The server no longer includes the collector name in the rubbish-collected broadcast.
+- Players must visually observe another player collecting rubbish if they want to infer that player is a Blender.
+
+No gameplay balance, Maths, Bust, reconnect, bot, role, flag, or round-target rules were changed.

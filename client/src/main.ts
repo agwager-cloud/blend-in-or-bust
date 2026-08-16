@@ -932,14 +932,15 @@ function bindRoom(room: Room<any>, client: Client): void {
     );
     game?.showObjectiveNotice(`${by} found a flag!`, 4200);
   });
-  room.onMessage("rubbish-collected", ({ id, by }: { id: string; by: string }) => {
+  room.onMessage("rubbish-collected", ({ id }: { id: string }) => {
     if (!isCurrentRoom(room)) return;
     rubbishCounter.animate(
       [{ transform: "scale(1)" }, { transform: "scale(1.28)", color: "#fff" }, { transform: "scale(1)" }],
       { duration: 420 },
     );
+    // Keep collection visible in the 3D world, but do not announce who
+    // collected it. Players should identify Blenders by observation only.
     game?.collectRubbishVisual(id);
-    game?.showObjectiveNotice(`${by} cleaned up some rubbish!`, 3200);
   });
   room.onMessage("bot-lift", ({ containerId }: { containerId: string }) => {
     if (!isCurrentRoom(room)) return;

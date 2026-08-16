@@ -1085,7 +1085,7 @@ export class BlendRoom extends Room<GameState> {
       if (distanceSquared > 1.55 ** 2) continue;
       rubbish.collected = true;
       this.state.rubbishCollected += 1;
-      this.broadcast("rubbish-collected", { id: rubbish.id, by: player.name });
+      this.broadcast("rubbish-collected", { id: rubbish.id });
       this.checkBlenderObjectiveWin();
       return;
     }
