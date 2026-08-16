@@ -864,6 +864,12 @@ function bindRoom(room: Room<any>, client: Client): void {
     attackerSessionId: string;
   }) => {
     if (!isCurrentRoom(room)) return;
+    // A Maths question never shields a Blender. If the local player is Busted
+    // while answering or helping, remove that overlay immediately so BUSTED is
+    // the first feedback they see.
+    if (targetSessionId === room.sessionId && mathsQuestionMode !== "none") {
+      closeMathsQuestionOverlay(true);
+    }
     game?.handleBust(targetSessionId);
     if (attackerSessionId === room.sessionId) game?.confirmBust();
   });
@@ -978,9 +984,21 @@ function bindRoom(room: Room<any>, client: Client): void {
     if (!isCurrentRoom(room) || currentMathsFlagId !== flagId) return;
     completeLiveMathsQuestion(challengerName);
   });
-  room.onMessage("maths-challenge-cancelled", ({ flagId }: { flagId: string; reason?: string }) => {
+  room.onMessage("maths-challenge-cancelled", ({
+    flagId,
+    reason,
+  }: { flagId: string; reason?: string }) => {
     if (!isCurrentRoom(room) || currentMathsFlagId !== flagId) return;
+    const wasAnswering = mathsQuestionMode === "answering";
     closeMathsQuestionOverlay(true);
+    if (reason === "player-busted") {
+      // The answering player gets the dedicated BUSTED banner from the Bust
+      // event. Helpers get a useful explanation and can approach the flag again.
+      if (!wasAnswering) {
+        game?.showObjectiveNotice("The answering Blender was busted - the flag is available again.", 3000);
+      }
+      return;
+    }
     game?.showObjectiveNotice("That flag challenge is available again.", 2400);
   });
   room.onStateChange(() => {
@@ -1781,6 +1799,9 @@ class PracticeGame {
   ] as const;
   private static readonly LIFT_ANIMATION_MS = 1050;
   private static readonly LIFT_BLEND_LOCK_MS = 1125;
+  // Viewing an active Maths challenge is intentionally much more generous than
+  // normal Lift range so teammates can help even when furniture blocks access.
+  private static readonly MATHS_VIEW_RANGE = 8.0;
   private static readonly PILLAR_ROOM_INDICES = new Set([1, 3, 5, 9, 15, 19, 21, 23]);
   private engine: Engine;
   private scene: Scene;
@@ -3918,12 +3939,22 @@ class PracticeGame {
       this.liftTargetId = `player:${sessionId}`;
     });
     this.mathsViewFlagId = "";
-    if (localRole === "seeker" && this.liftTargetId && !this.liftTargetId.startsWith("player:")) {
+    if (localRole === "seeker" && room) {
       const flags = roomCollection(room, "flags");
+      let nearestQuestionDistance = PracticeGame.MATHS_VIEW_RANGE;
       flags?.forEach((flag: any, flagId: string) => {
-        if (this.mathsViewFlagId || flag.found || !flag.challengeActive) return;
-        if (flag.containerId !== this.liftTargetId || flag.challengerSessionId === room.sessionId) return;
+        if (flag.found || !flag.challengeActive || flag.challengerSessionId === room.sessionId) return;
+        if (this.roomNameAt(Number(flag.x), Number(flag.z)) !== currentRoom) return;
+        const distance = Math.hypot(
+          this.playerRoot.position.x - Number(flag.x),
+          this.playerRoot.position.z - Number(flag.z),
+        );
+        if (distance >= nearestQuestionDistance) return;
+        nearestQuestionDistance = distance;
         this.mathsViewFlagId = flagId;
+        // Reuse the Lift control as VIEW ?. No line-of-sight is required: nearby
+        // furniture should never prevent a teammate from opening read-only help.
+        this.liftTargetId = String(flag.containerId);
       });
     }
     const liftInProgress = performance.now() < this.liftLockedUntil;

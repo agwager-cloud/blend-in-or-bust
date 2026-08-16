@@ -41,6 +41,8 @@ export class BlendRoom extends Room<GameState> {
   private static readonly LIFT_BLEND_LOCK_MS = 1125;
   private static readonly GLOBAL_BUST_COOLDOWN_MS = 10_000;
   private static readonly BOT_PROP_INTERACT_RANGE = 3.1;
+  private static readonly MATHS_VIEW_RANGE = 8.0;
+  private static readonly BUSTED_RESULT_HOLD_MS = 2_000;
   private static readonly BOT_LIFT_COOLDOWN_MS = 4_800;
   private static readonly ROOM_CENTERS = [-40, -20, 0, 20, 40] as const;
   private static readonly CENTRE_ROOM_INDEX = 12;
@@ -93,6 +95,9 @@ export class BlendRoom extends Room<GameState> {
   // Blender and reset the 2.4-second Bust preparation forever.
   private botPursuitLocks = new Map<string, { targetId: string; lockedUntil: number }>();
   private postMeetingMoveBlockedUntil = 0;
+  // When the final active Blender is Busted, keep the round in-game briefly so
+  // that device can visibly receive the BUSTED feedback before results replace it.
+  private postBustResultAt = 0;
   // A round waits for every active human to load the 3D museum. Players may
   // confirm their role early, but a fixed server-side grace period prevents one
   // student from holding the whole class at the role screen indefinitely.
@@ -182,13 +187,9 @@ export class BlendRoom extends Room<GameState> {
           reject("invalid-target");
           return;
         }
-        // A Blender answering a mandatory Maths question cannot move, skip or
-        // close the challenge. Protect that player from Busts until the
-        // challenge resolves so a Buster cannot eliminate a trapped player.
-        if (this.mathsChallengeForPlayer(requestedTargetId)) {
-          reject("maths-protected");
-          return;
-        }
+        // Maths questions do not make Blenders safe. An answering or viewing
+        // Blender can still be Busted; the active challenge is cancelled below
+        // so the hidden flag immediately becomes available to another Blender.
         const now = Date.now();
         const distanceSquared = (attacker.x - target.x) ** 2 + (attacker.z - target.z) ** 2;
         if (distanceSquared > 3.35 ** 2) {
@@ -223,7 +224,7 @@ export class BlendRoom extends Room<GameState> {
           attackerSessionId: client.sessionId,
           targetName: target.name,
         });
-        this.checkTeamWin();
+        this.checkTeamWinAfterBust(now);
       } catch (error) {
         // A malformed bot/state edge case must never crash the room process.
         // Reject the action, keep the socket open and leave a useful Render log.
@@ -302,7 +303,10 @@ export class BlendRoom extends Room<GameState> {
       const challenge = this.mathsChallenges.get(flagId);
       if (!player?.alive || player.isBot || player.isLateSpectator
         || this.roles.get(client.sessionId) !== "seeker" || !flag || !challenge) return;
-      if (Math.hypot(player.x - flag.x, player.z - flag.z) > 3.25) return;
+      // Helpers may view an active question from much farther away than normal
+      // Lift range. Keep it room-local so players cannot read through museum walls.
+      if (this.roomIndexAt(player.x, player.z) !== this.roomIndexAt(flag.x, flag.z)) return;
+      if (Math.hypot(player.x - flag.x, player.z - flag.z) > BlendRoom.MATHS_VIEW_RANGE) return;
       this.sendMathsQuestion(client, challenge, challenge.challengerSessionId === client.sessionId);
     });
     this.onMessage("maths-answer", (client, value: unknown) => {
@@ -909,7 +913,8 @@ export class BlendRoom extends Room<GameState> {
       this.tryBeginSynchronizedReveal(now);
     } else if (this.state.phase === "reveal" && now >= this.state.revealEndsAt) {
       this.state.phase = "game";
-    } else if (this.state.phase === "game" && now >= this.state.roundEndsAt) {
+    } else if (this.state.phase === "game" && now >= this.state.roundEndsAt
+      && now >= this.postBustResultAt) {
       this.finishRound("blenders");
     }
     if (this.state.phase === "game" && now >= this.postMeetingMoveBlockedUntil) {
@@ -1029,6 +1034,26 @@ export class BlendRoom extends Room<GameState> {
       return true;
     }
     return false;
+  }
+
+  private checkTeamWinAfterBust(now: number): void {
+    const activeSeekers = [...this.roles].filter(([id, role]) =>
+      role === "seeker" && this.state.players.get(id)?.alive).length;
+    if (activeSeekers > 0) return;
+
+    // The Bust event is delivered immediately, but hold the results phase for
+    // two seconds so the eliminated Blender actually sees BUSTED before the
+    // BUSTERS WIN overlay replaces the gameplay screen.
+    this.postBustResultAt = Math.max(
+      this.postBustResultAt,
+      now + BlendRoom.BUSTED_RESULT_HOLD_MS,
+    );
+    const expectedAt = this.postBustResultAt;
+    this.clock.setTimeout(() => {
+      if (this.state.phase !== "game" || this.postBustResultAt !== expectedAt) return;
+      this.postBustResultAt = 0;
+      this.checkTeamWin();
+    }, BlendRoom.BUSTED_RESULT_HOLD_MS);
   }
 
   private tryCollectFlag(_sessionId: string, _player: PlayerState): void {
@@ -1409,6 +1434,7 @@ export class BlendRoom extends Room<GameState> {
 
   private finishRound(winner: "seekers" | "blenders"): void {
     if (this.state.phase === "results") return;
+    this.postBustResultAt = 0;
     this.clearMathsChallenges("round-ended");
     this.state.winner = winner;
     this.state.phase = "results";
@@ -1423,6 +1449,7 @@ export class BlendRoom extends Room<GameState> {
   }
 
   private resetToLobby(): void {
+    this.postBustResultAt = 0;
     this.removeBots();
     this.clearMathsChallenges("lobby-reset");
     this.mathsQuestionDeck = [];
@@ -2079,7 +2106,6 @@ export class BlendRoom extends Room<GameState> {
     const preferredInRange = preferredTargetId
       && preferred?.alive
       && this.roles.get(preferredTargetId) === "seeker"
-      && !this.mathsChallengeForPlayer(preferredTargetId)
       && Math.hypot(attacker.x - preferred.x, attacker.z - preferred.z) <= 3.35;
     const targetEntry: [string, PlayerState] | undefined = preferredInRange
       ? [preferredTargetId, preferred]
@@ -2088,7 +2114,6 @@ export class BlendRoom extends Room<GameState> {
           id !== sessionId
           && player.alive
           && this.roles.get(id) === "seeker"
-          && !this.mathsChallengeForPlayer(id)
           && Math.hypot(attacker.x - player.x, attacker.z - player.z) <= 3.35)
         .sort(([, a], [, b]) =>
           Math.hypot(attacker.x - a.x, attacker.z - a.z)
@@ -2115,9 +2140,9 @@ export class BlendRoom extends Room<GameState> {
     target.alive = false;
     target.moving = false;
     target.disguise = "";
-    // Safety net: if a Bust and a question-start packet ever cross in the same
-    // simulation tick, release the flag instead of leaving a dead player as
-    // the permanent challenge owner.
+    // Being in a Maths challenge is deliberately risky: Busters may Bust the
+    // answering Blender. Cancel ownership immediately so the question closes
+    // and the hidden flag can be attempted by another Blender.
     this.cancelMathsChallengeForPlayer(targetSessionId, "player-busted");
     target.spectateUnlockAt = now + 15_000;
     target.spectateTarget = "";
@@ -2133,7 +2158,7 @@ export class BlendRoom extends Room<GameState> {
       attackerSessionId: sessionId,
       targetName: target.name,
     });
-    this.checkTeamWin();
+    this.checkTeamWinAfterBust(now);
   }
 
   private updateSpectators(now: number): void {

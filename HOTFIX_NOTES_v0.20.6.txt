@@ -1,0 +1,9 @@
+Blend In or Bust v0.20.6
+
+- Busters can Bust Blenders while they are answering a Maths question.
+- Busters can also Bust Blenders who are viewing another player's question.
+- A Bust immediately closes the local Maths overlay and shows BUSTED.
+- If that Bust eliminates the final Blender, BUSTERS WIN appears about 2 seconds later.
+- An answering Blender's Bust cancels/releases that flag challenge for another Blender.
+- VIEW ? range increased from normal Lift range to 8 world units, constrained to the same museum room.
+- The v0.20.4 objective balance table remains unchanged.
