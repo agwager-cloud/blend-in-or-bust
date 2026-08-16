@@ -1714,7 +1714,9 @@ select {
   overflow: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
-  touch-action: pan-x pan-y;
+  /* Must win even if this overlay is ever nested under .game-screen, whose
+     normal gameplay surfaces intentionally disable browser touch gestures. */
+  touch-action: pan-x pan-y !important;
   border: 2px solid rgba(255, 255, 255, .2);
   border-radius: 14px;
   background: #fff;

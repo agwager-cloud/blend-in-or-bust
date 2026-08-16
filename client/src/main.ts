@@ -357,7 +357,15 @@ for (const eventName of ["gesturestart", "gesturechange", "gestureend"]) {
   }, { capture: true, passive: false });
 }
 document.addEventListener("touchmove", (event) => {
-  if (gameIsVisible()) event.preventDefault();
+  if (!gameIsVisible()) return;
+
+  // The live Maths overlay is shown while the 3D game screen remains visible.
+  // Do not let the global anti-page-scroll guard cancel touch panning inside
+  // the question viewport; native overflow scrolling is how iPad/phone users
+  // drag large question images to see the full question.
+  if (event.composedPath().includes(mathsQuestionScroll)) return;
+
+  event.preventDefault();
 }, { capture: true, passive: false });
 document.addEventListener("dblclick", (event) => {
   if (gameIsVisible()) event.preventDefault();
