@@ -1,0 +1,10 @@
+Blend In or Bust v0.20.5 - Maths challenge / bot Bust race fix
+
+- Players actively answering a mandatory Maths flag question are now protected from Busts until the question resolves.
+- Bot Busters no longer target or Bust a Blender who owns an active Maths challenge.
+- Human Busters are also rejected if they attempt to Bust the active question challenger.
+- Bot Blender flag searching now skips any flag currently owned by a human Maths challenge.
+- Bot Bust logic now cancels a Maths challenge as a safety net if a same-tick race ever occurs.
+- Invalid/stale Maths-answer submissions now receive a challenge-cancelled response instead of leaving the client on Checking answer forever.
+- Objective balance table from v0.20.4 is unchanged.
+- No client files changed; existing v0.20.3 itch.io build remains compatible.

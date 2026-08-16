@@ -182,6 +182,13 @@ export class BlendRoom extends Room<GameState> {
           reject("invalid-target");
           return;
         }
+        // A Blender answering a mandatory Maths question cannot move, skip or
+        // close the challenge. Protect that player from Busts until the
+        // challenge resolves so a Buster cannot eliminate a trapped player.
+        if (this.mathsChallengeForPlayer(requestedTargetId)) {
+          reject("maths-protected");
+          return;
+        }
         const now = Date.now();
         const distanceSquared = (attacker.x - target.x) ** 2 + (attacker.z - target.z) ** 2;
         if (distanceSquared > 3.35 ** 2) {
@@ -306,9 +313,15 @@ export class BlendRoom extends Room<GameState> {
       if (!flagId || !["A", "B", "C", "D", "E"].includes(answer)) return;
       const challenge = this.mathsChallenges.get(flagId);
       const player = this.state.players.get(client.sessionId);
-      if (!challenge || challenge.challengerSessionId !== client.sessionId
-        || !player?.alive || player.isBot || player.isLateSpectator
-        || this.roles.get(client.sessionId) !== "seeker") return;
+      if (!challenge || challenge.challengerSessionId !== client.sessionId) {
+        client.send("maths-challenge-cancelled", { flagId, reason: "challenge-unavailable" });
+        return;
+      }
+      if (!player?.alive || player.isBot || player.isLateSpectator
+        || this.roles.get(client.sessionId) !== "seeker") {
+        this.cancelMathsChallenge(flagId, "challenger-unavailable");
+        return;
+      }
       const now = Date.now();
       if (now < challenge.lockoutUntil) {
         client.send("maths-challenge-lockout", {
@@ -1657,7 +1670,7 @@ export class BlendRoom extends Room<GameState> {
     const liftableById = new Map(liftables.map((prop) => [prop.id, prop]));
     const history = this.botLiftHistory.get(sessionId) ?? [];
     const candidates = [...this.state.flags.values()]
-      .filter((flag) => !flag.found && !flag.revealed)
+      .filter((flag) => !flag.found && !flag.revealed && !flag.challengeActive)
       .map((flag) => liftableById.get(flag.containerId))
       .filter((prop): prop is { id: string; x: number; z: number } => Boolean(prop))
       .map((prop) => ({
@@ -1773,7 +1786,7 @@ export class BlendRoom extends Room<GameState> {
       && remaining > 1
       && this.botFlagsFoundThisRound < this.botFlagFindLimit) {
       const hiddenFlag = [...this.state.flags.values()].find((flag) =>
-        !flag.found && !flag.revealed && flag.containerId === propId);
+        !flag.found && !flag.revealed && !flag.challengeActive && flag.containerId === propId);
       if (hiddenFlag) {
         hiddenFlag.revealed = true;
         hiddenFlag.found = true;
@@ -2066,6 +2079,7 @@ export class BlendRoom extends Room<GameState> {
     const preferredInRange = preferredTargetId
       && preferred?.alive
       && this.roles.get(preferredTargetId) === "seeker"
+      && !this.mathsChallengeForPlayer(preferredTargetId)
       && Math.hypot(attacker.x - preferred.x, attacker.z - preferred.z) <= 3.35;
     const targetEntry: [string, PlayerState] | undefined = preferredInRange
       ? [preferredTargetId, preferred]
@@ -2074,6 +2088,7 @@ export class BlendRoom extends Room<GameState> {
           id !== sessionId
           && player.alive
           && this.roles.get(id) === "seeker"
+          && !this.mathsChallengeForPlayer(id)
           && Math.hypot(attacker.x - player.x, attacker.z - player.z) <= 3.35)
         .sort(([, a], [, b]) =>
           Math.hypot(attacker.x - a.x, attacker.z - a.z)
@@ -2100,6 +2115,10 @@ export class BlendRoom extends Room<GameState> {
     target.alive = false;
     target.moving = false;
     target.disguise = "";
+    // Safety net: if a Bust and a question-start packet ever cross in the same
+    // simulation tick, release the flag instead of leaving a dead player as
+    // the permanent challenge owner.
+    this.cancelMathsChallengeForPlayer(targetSessionId, "player-busted");
     target.spectateUnlockAt = now + 15_000;
     target.spectateTarget = "";
     const crime = new CrimeState();
