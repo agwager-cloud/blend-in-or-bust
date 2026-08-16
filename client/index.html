@@ -118,6 +118,7 @@
             <strong id="players-counter">0 ACTIVE</strong>
             <span id="busted-counter">0 busted</span>
           </div>
+          <button id="host-return-lobby-now" class="host-return-lobby-now hidden" type="button" aria-label="Return all players to the lobby">LOBBY</button>
           <div class="status-pill flags">
             <strong id="flags-counter">FLAGS 0 / 0</strong>
             <span id="rubbish-counter">0 RUBBISH LEFT</span>
@@ -215,6 +216,17 @@
             <div id="vote-grid" class="vote-grid"></div>
             <button id="skip-vote-button" class="skip-vote hidden">SKIP VOTE</button>
             <p id="vote-status">Movement and the round timer are paused.</p>
+          </div>
+        </section>
+        <section id="host-return-lobby-confirm" class="host-return-lobby-confirm hidden" role="dialog" aria-modal="true" aria-labelledby="host-return-lobby-title">
+          <div class="host-return-lobby-card">
+            <span>HOST CONTROL</span>
+            <h2 id="host-return-lobby-title">RETURN TO LOBBY?</h2>
+            <p>The current round will end and all connected players will be reset back to the lobby.</p>
+            <div class="host-return-lobby-actions">
+              <button id="host-return-lobby-cancel" type="button">STAY IN GAME</button>
+              <button id="host-return-lobby-confirm-button" class="primary" type="button">RETURN TO LOBBY</button>
+            </div>
           </div>
         </section>
         <section id="results-overlay" class="game-overlay hidden">

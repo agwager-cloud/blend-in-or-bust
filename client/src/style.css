@@ -391,6 +391,68 @@ select {
 }
 
 
+
+.host-return-lobby-now {
+  pointer-events: auto;
+  flex: 0 0 auto;
+  min-width: 72px;
+  min-height: 48px;
+  padding: 7px 11px;
+  border: 1px solid rgba(255, 178, 92, .72);
+  border-radius: 14px;
+  color: #fff3dd;
+  background: linear-gradient(145deg, rgba(90, 35, 44, .94), rgba(57, 24, 70, .94));
+  box-shadow: 0 7px 20px rgba(0, 0, 0, .28);
+  font-size: 10px;
+  font-weight: 950;
+  letter-spacing: .06em;
+}
+.host-return-lobby-now:hover { filter: brightness(1.12); }
+.host-return-lobby-now:active { transform: translateY(1px); }
+
+.host-return-lobby-confirm {
+  z-index: 135;
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(5, 4, 34, .82);
+  backdrop-filter: blur(9px);
+  pointer-events: auto;
+}
+.host-return-lobby-card {
+  width: min(520px, 100%);
+  padding: 28px;
+  border: 2px solid rgba(103, 242, 255, .82);
+  border-radius: 24px;
+  background: linear-gradient(145deg, #17105d, #351172);
+  box-shadow: 0 22px 70px rgba(0, 0, 0, .55);
+  text-align: center;
+}
+.host-return-lobby-card > span {
+  color: #81f5ff;
+  font-size: 11px;
+  font-weight: 950;
+  letter-spacing: .15em;
+}
+.host-return-lobby-card h2 {
+  margin: 10px 0 8px;
+  color: #caff4f;
+  font-size: clamp(28px, 6vw, 44px);
+}
+.host-return-lobby-card p {
+  margin: 0 0 20px;
+  color: #e3e5ff;
+  line-height: 1.45;
+}
+.host-return-lobby-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.host-return-lobby-actions button { min-height: 54px; }
+
 .status-pill {
   display: grid;
   min-height: 48px;
@@ -904,6 +966,14 @@ select {
     white-space: nowrap;
   }
   .status-pill.players { flex: 0 0 62px; min-width: 62px; }
+  .host-return-lobby-now {
+    flex: 0 0 50px;
+    min-width: 50px;
+    min-height: 44px;
+    padding: 4px;
+    font-size: 7.5px;
+    letter-spacing: 0;
+  }
   .status-pill.players strong, .status-pill.flags strong { font-size: 9px; letter-spacing: -.02em; white-space: nowrap; }
   .status-pill.flags { flex: 0 0 46px; min-width: 46px; text-align: center; }
   .status-pill.timer { flex: 0 0 60px; min-width: 60px; min-height: 44px; padding-inline: 4px; }
@@ -927,6 +997,7 @@ select {
   .status-pill.players strong,
   .status-pill.flags strong { font-size: 8.5px; }
   .status-pill.players { flex-basis: 58px; min-width: 58px; }
+  .host-return-lobby-now { flex-basis: 46px; min-width: 46px; font-size: 7px; }
   .status-pill.flags { flex-basis: 43px; min-width: 43px; }
   .status-pill.timer { flex-basis: 56px; min-width: 56px; }
   .status-pill.timer strong { font-size: 16px; }
@@ -1799,4 +1870,10 @@ select {
   .maths-question-status { min-height: 34px; padding: 4px 7px; font-size: 11px; }
   .maths-question-countdown { width: 30px; height: 30px; flex-basis: 30px; font-size: 14px; }
   .maths-answer-grid button { min-height: 42px; font-size: 22px; }
+}
+
+@media (max-width: 520px) {
+  .host-return-lobby-confirm { padding: 10px; }
+  .host-return-lobby-card { padding: 20px 16px; }
+  .host-return-lobby-actions { grid-template-columns: 1fr; }
 }

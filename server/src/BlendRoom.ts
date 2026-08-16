@@ -42,6 +42,7 @@ export class BlendRoom extends Room<GameState> {
   private static readonly GLOBAL_BUST_COOLDOWN_MS = 10_000;
   private static readonly BOT_PROP_INTERACT_RANGE = 3.1;
   private static readonly MATHS_VIEW_RANGE = 8.0;
+  private static readonly HUMAN_BUST_ACCEPT_RANGE = 5.0;
   private static readonly BUSTED_RESULT_HOLD_MS = 2_000;
   private static readonly BOT_LIFT_COOLDOWN_MS = 4_800;
   private static readonly ROOM_CENTERS = [-40, -20, 0, 20, 40] as const;
@@ -192,7 +193,10 @@ export class BlendRoom extends Room<GameState> {
         // so the hidden flag immediately becomes available to another Blender.
         const now = Date.now();
         const distanceSquared = (attacker.x - target.x) ** 2 + (attacker.z - target.z) ** 2;
-        if (distanceSquared > 3.35 ** 2) {
+        // The browser highlights targets inside 4.5 units. Accept a slightly
+        // larger 5.0-unit server radius so a running Blender is not missed
+        // solely because the authoritative position is one network tick ahead.
+        if (distanceSquared > BlendRoom.HUMAN_BUST_ACCEPT_RANGE ** 2) {
           reject("out-of-range");
           return;
         }
@@ -375,6 +379,16 @@ export class BlendRoom extends Room<GameState> {
       const challenge = this.mathsChallengeForPlayer(client.sessionId);
       if (challenge) this.sendMathsQuestion(client, challenge, true);
     });
+    this.onMessage("resume-state", (client) => {
+      // Colyseus restores the schema on reconnect, but private role messages
+      // are not part of that schema. Re-send them so a refreshed Buster knows
+      // both its role and which other Busters must be excluded as Bust targets.
+      this.sendRoleResume(client);
+      const player = this.state.players.get(client.sessionId);
+      if (player && (!player.alive || player.isLateSpectator)) {
+        this.sendSpectatorConcealment(client.sessionId);
+      }
+    });
     this.onMessage("report", (client, crimeId: unknown) => {
       if (typeof crimeId !== "string" || this.state.phase !== "game") return;
       const reporter = this.state.players.get(client.sessionId);
@@ -470,7 +484,7 @@ export class BlendRoom extends Room<GameState> {
     });
     this.onMessage("return-lobby", (client) => {
       const player = this.state.players.get(client.sessionId);
-      if (!player?.isHost || this.state.phase !== "results") return;
+      if (!player?.isHost || this.state.phase === "lobby") return;
       this.resetToLobby();
     });
   }
@@ -2234,6 +2248,24 @@ export class BlendRoom extends Room<GameState> {
     // Send the complete reset in one message so every client snaps all active
     // avatars to their original rooms before the meeting overlay disappears.
     this.broadcast("reset-positions", { positions });
+  }
+
+  private sendRoleResume(client: Client): void {
+    const player = this.state.players.get(client.sessionId);
+    const role = this.roles.get(client.sessionId);
+    if (!player || player.isLateSpectator || !role) return;
+    const blenderTeammates = role === "blender"
+      ? [...this.roles]
+        .filter(([sessionId, candidateRole]) =>
+          sessionId !== client.sessionId
+          && candidateRole === "blender"
+          && Boolean(this.state.players.get(sessionId)?.alive))
+        .map(([sessionId]) => sessionId)
+      : [];
+    client.send("role-resume", {
+      role,
+      blenderTeammates,
+    });
   }
 
   private sendSpectatorConcealment(sessionId: string): void {

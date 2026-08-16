@@ -1,0 +1,9 @@
+Blend In or Bust v0.20.7
+
+- Fixed Buster controls after a page refresh/reconnection by restoring the private role and Buster teammate exclusion list from the server.
+- Increased human Buster targeting radius to 4.5 world units, with 5.0-unit server acceptance tolerance for moving targets/network delay.
+- Added host-only LOBBY button beside the Active/Busted HUD counter during an active round.
+- Added confirmation overlay before aborting a round.
+- Host Return to Lobby now works from active round phases, not only the results screen.
+- All connected human players are reset back to the lobby; testing bots/round objectives/roles are cleared.
+- Existing Maths, objective balance, spectator and anti-cheat rules remain unchanged.

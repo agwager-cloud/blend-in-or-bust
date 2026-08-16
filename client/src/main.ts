@@ -127,6 +127,10 @@ const resultsOverlay = document.querySelector<HTMLElement>("#results-overlay")!;
 const winnerTitle = document.querySelector<HTMLElement>("#winner-title")!;
 const winnerMessage = document.querySelector<HTMLElement>("#winner-message")!;
 const returnLobbyButton = document.querySelector<HTMLButtonElement>("#return-lobby-button")!;
+const hostReturnLobbyNow = document.querySelector<HTMLButtonElement>("#host-return-lobby-now")!;
+const hostReturnLobbyConfirm = document.querySelector<HTMLElement>("#host-return-lobby-confirm")!;
+const hostReturnLobbyCancel = document.querySelector<HTMLButtonElement>("#host-return-lobby-cancel")!;
+const hostReturnLobbyConfirmButton = document.querySelector<HTMLButtonElement>("#host-return-lobby-confirm-button")!;
 const resultsWaiting = document.querySelector<HTMLElement>("#results-waiting")!;
 const bustButton = document.querySelector<HTMLButtonElement>("#bust-button")!;
 const liftButton = document.querySelector<HTMLButtonElement>("#lift-button")!;
@@ -696,6 +700,8 @@ async function restoreRoomAfterRefresh(): Promise<void> {
     arenaEntryGeneration += 1;
     activeRoom = opened.room;
     bindRoom(opened.room, opened.client);
+    safeRoomSend(opened.room, "resume-state");
+    safeRoomSend(opened.room, "maths-resume");
     titleScreen.classList.add("hidden");
     lobbyScreen.classList.remove("hidden");
     updateLobby();
@@ -845,6 +851,26 @@ function bindRoom(room: Room<any>, client: Client): void {
     beginRoleAcknowledgementWindow(autoContinueAt);
     roleReveal.classList.add("role-reveal-priority");
     roleReveal.classList.remove("hidden");
+  });
+  room.onMessage("role-resume", ({
+    role,
+    blenderTeammates: teammateIds = [],
+  }: {
+    role: "seeker" | "blender";
+    blenderTeammates?: string[];
+  }) => {
+    if (!isCurrentRoom(room)) return;
+    // A full-page refresh recreates the browser runtime, so private role data
+    // and the Buster teammate exclusion set must be restored explicitly. The
+    // server remains authoritative; do not replay the role-reveal gate here.
+    localRole = role;
+    blenderTeammates = new Set(teammateIds);
+    awaitingLoadingPhaseAfterRoleMessage = false;
+    roleAcknowledgedForRound = true;
+    roleReadySentForRound = true;
+    clearRoleAcknowledgementTimer();
+    roleReveal.classList.add("hidden");
+    roleReveal.classList.remove("role-reveal-priority");
   });
   room.onMessage("disguise-changed", ({
     sessionId,
@@ -1046,6 +1072,7 @@ function bindRoom(room: Room<any>, client: Client): void {
       activeRoom = restored.room;
       game?.setRoom(restored.room);
       bindRoom(restored.room, restored.client);
+      safeRoomSend(restored.room, "resume-state");
       safeRoomSend(restored.room, "maths-resume");
       connectionStatus.textContent = "CONNECTED";
       connectionStatus.classList.add("online");
@@ -1422,6 +1449,10 @@ function updateMatchScreens(room: Room<any>): void {
   updateMathsOverlayForPhase(phase);
   const local = players.get(room.sessionId);
   const lateSpectator = Boolean(local?.isLateSpectator);
+  const localIsHost = Boolean(local?.isHost);
+  const hostCanAbortRound = localIsHost && !["lobby", "results"].includes(phase);
+  hostReturnLobbyNow.classList.toggle("hidden", !hostCanAbortRound);
+  if (!hostCanAbortRound) hostReturnLobbyConfirm.classList.add("hidden");
   const hasPrivateRole = localRole === "seeker" || localRole === "blender";
 
   // Direct role messages may beat the loading-phase state patch. Because the
@@ -1473,6 +1504,7 @@ function updateMatchScreens(room: Room<any>): void {
   }
   if (phase === "lobby" && !lobbyScreen.classList.contains("hidden")) return;
   if (phase === "lobby") {
+    hostReturnLobbyConfirm.classList.add("hidden");
     game?.pause();
     resultsOverlay.classList.add("hidden");
     roleReveal.classList.add("hidden");
@@ -1717,11 +1749,35 @@ blenderCountSelect.addEventListener("change", sendSettings);
 botsEnabledSelect.addEventListener("change", sendSettings);
 startButton.addEventListener("click", () => safeRoomSend(activeRoom, "start", currentLobbySettings()));
 returnLobbyButton.addEventListener("click", () => safeRoomSend(activeRoom, "return-lobby"));
+hostReturnLobbyNow.addEventListener("click", () => {
+  const room = activeRoom;
+  const local = room ? roomPlayers(room)?.get(room.sessionId) : undefined;
+  if (!room || !local?.isHost || ["lobby", "results"].includes(String(room.state?.phase ?? ""))) return;
+  hostReturnLobbyConfirmButton.disabled = false;
+  hostReturnLobbyConfirmButton.textContent = "RETURN TO LOBBY";
+  hostReturnLobbyConfirm.classList.remove("hidden");
+});
+hostReturnLobbyCancel.addEventListener("click", () => hostReturnLobbyConfirm.classList.add("hidden"));
+hostReturnLobbyConfirmButton.addEventListener("click", () => {
+  const room = activeRoom;
+  const local = room ? roomPlayers(room)?.get(room.sessionId) : undefined;
+  if (!room || !local?.isHost) {
+    hostReturnLobbyConfirm.classList.add("hidden");
+    return;
+  }
+  hostReturnLobbyConfirmButton.disabled = true;
+  hostReturnLobbyConfirmButton.textContent = "RETURNING...";
+  if (!safeRoomSend(room, "return-lobby")) {
+    hostReturnLobbyConfirmButton.disabled = false;
+    hostReturnLobbyConfirmButton.textContent = "RETURN TO LOBBY";
+  }
+});
 document.querySelector("#leave-button")!.addEventListener("click", () => leaveRoom(true));
 
 function leaveRoom(consented: boolean, message = "You left the room."): void {
   if (consented) clearReconnectSession();
   closeMathsQuestionOverlay(true);
+  hostReturnLobbyConfirm.classList.add("hidden");
   arenaEntryGeneration += 1;
   hideSceneLoading();
   roleAcknowledgedForRound = true;
@@ -1802,6 +1858,7 @@ class PracticeGame {
   // Viewing an active Maths challenge is intentionally much more generous than
   // normal Lift range so teammates can help even when furniture blocks access.
   private static readonly MATHS_VIEW_RANGE = 8.0;
+  private static readonly HUMAN_BUST_TARGET_RANGE = 4.5;
   private static readonly PILLAR_ROOM_INDICES = new Set([1, 3, 5, 9, 15, 19, 21, 23]);
   private engine: Engine;
   private scene: Scene;
@@ -3193,7 +3250,8 @@ class PracticeGame {
     const inputY = Math.max(-1, Math.min(1, keyboardY + this.touchMove.y));
     const movementAllowed = (!this.room || this.room.state.phase === "game")
       && performance.now() >= this.movementSuppressedUntil
-      && mathsQuestionMode === "none";
+      && mathsQuestionMode === "none"
+      && hostReturnLobbyConfirm.classList.contains("hidden");
     const horizontalOnlyTurn = this.localAlive
       && movementAllowed
       && Math.abs(inputX) > 0.08
@@ -3870,7 +3928,7 @@ class PracticeGame {
     if (!visible || !room) return;
     const players = roomPlayers(room);
     if (!players) return;
-    let nearestDistance = 3.35;
+    let nearestDistance = PracticeGame.HUMAN_BUST_TARGET_RANGE;
     players.forEach((player: any, sessionId: string) => {
       if (sessionId === room.sessionId || blenderTeammates.has(sessionId) || !player.alive) return;
       const distance = Math.hypot(
