@@ -58,6 +58,7 @@ export class BlendRoom extends Room<GameState> {
   // enter before the first onJoin callback adds its player to room state.
   private nameReservations = new Map<string, { sessionId: string; expiresAt: number }>();
   private sessionDevices = new Map<string, string>();
+  private reconnectingSessions = new Set<string>();
   // Names removed by the host stay blocked for the lifetime of this room.
   // Players may rejoin only after choosing a genuinely different name.
   private removedNameKeys = new Set<string>();
@@ -468,6 +469,21 @@ export class BlendRoom extends Room<GameState> {
     const now = Date.now();
     this.pruneJoinReservations(now);
 
+    // If this browser has refreshed/reloaded while its old socket is inside the
+    // reconnection grace period, do not leave the user trapped behind both the
+    // old name and old device reservation. A normal join from the same stable
+    // device id supersedes only a session that is already known to be offline.
+    // During an active round the replacement joins as a CCTV spectator; during
+    // the lobby it rejoins normally. Sessions that are still genuinely online
+    // remain protected by the duplicate-device rule below.
+    const staleDeviceSession = this.deviceSessions.get(deviceId);
+    if (staleDeviceSession
+      && staleDeviceSession !== client.sessionId
+      && this.reconnectingSessions.has(staleDeviceSession)) {
+      this.reconnectingSessions.delete(staleDeviceSession);
+      this.removePlayerSession(staleDeviceSession);
+    }
+
     const joinNameKey = this.joinNameKey(name);
     const nameInUse = [...this.state.players.entries()].some(([sessionId, player]) =>
       sessionId !== client.sessionId && this.joinNameKey(player.name) === joinNameKey);
@@ -510,6 +526,7 @@ export class BlendRoom extends Room<GameState> {
     const joiningInProgress = this.state.phase !== "lobby";
     const player = new PlayerState();
     player.name = options.name ?? "Player";
+    player.connected = true;
     player.isHost = !joiningInProgress && this.state.players.size === 0;
     player.isLateSpectator = joiningInProgress;
 
@@ -567,10 +584,22 @@ export class BlendRoom extends Room<GameState> {
       return;
     }
     if (!consented) {
+      player.connected = false;
+      this.reconnectingSessions.add(client.sessionId);
       try {
         await this.allowReconnection(client, 45);
+        // A same-device fresh join may deliberately supersede this stale seat
+        // while allowReconnection is pending. If so, close any late resurrection
+        // of the old socket instead of letting it become a ghost connection.
+        if (!this.reconnectingSessions.delete(client.sessionId)
+          || !this.state.players.has(client.sessionId)) {
+          client.leave(4002);
+          return;
+        }
+        player.connected = true;
         return;
       } catch {
+        this.reconnectingSessions.delete(client.sessionId);
         // Reconnection window expired.
       }
     }
@@ -604,6 +633,7 @@ export class BlendRoom extends Room<GameState> {
     this.botPursuitLocks.delete(sessionId);
     this.roundReadyClients.delete(sessionId);
     this.roleReadyClients.delete(sessionId);
+    this.reconnectingSessions.delete(sessionId);
     for (const [botId, pursuit] of this.botPursuitLocks) {
       if (pursuit.targetId === sessionId) this.botPursuitLocks.delete(botId);
     }

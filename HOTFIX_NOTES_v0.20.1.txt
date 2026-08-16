@@ -1,0 +1,10 @@
+Blend In or Bust v0.20.1 - connection + mobile keyboard hotfix
+
+- Unexpected disconnects now retry Colyseus reconnection repeatedly for the full server grace period instead of giving up after the first failed attempt.
+- The current reconnection token is stored in sessionStorage, so an accidental browser refresh can restore the same live player session when the server seat is still available.
+- Players waiting for reconnection are marked disconnected so other devices no longer count a dead socket as connected.
+- If a browser refresh/fresh join occurs while its old same-device session is genuinely offline and waiting for reconnection, the new join can supersede that stale seat instead of receiving NAME ALREADY TAKEN followed by DEVICE ALREADY CONNECTED.
+- Sessions that are genuinely still online remain protected from duplicate-device joins.
+- Wrong-answer Maths disconnect protection remains intact: those sessions are removed immediately, their old reconnect token becomes invalid, and a fresh join during the round is spectator-only.
+- Mobile login fields no longer trigger background-music startup on the first input tap/keystroke, preventing the first on-screen keyboard from opening and immediately closing.
+- Includes the v0.20.0 lobby Buster-dropdown width fix.

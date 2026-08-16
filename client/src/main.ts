@@ -32,6 +32,15 @@ const assetUrl = (path: string): string =>
 const connectedPlayersLabel = (count: number): string =>
   `${count} ${count === 1 ? "player" : "players"} connected`;
 
+function connectedHumanCount(players: any | undefined): number {
+  if (!players) return 0;
+  let count = 0;
+  players.forEach((player: any) => {
+    if (!player.isBot && player.connected !== false) count += 1;
+  });
+  return count;
+}
+
 const titleBackgroundUrl = new URL(
   assetUrl("assets/title-background.jpg"),
   document.baseURI,
@@ -186,7 +195,8 @@ const ROLE_AUTO_CONTINUE_FALLBACK_MS = 12_000;
 const SERVER_WAKE_WINDOW_MS = 60_000;
 const CONNECTION_ATTEMPT_TIMEOUT_MS = 14_000;
 const CONNECTION_RETRY_DELAY_MS = 1_250;
-const RECONNECT_TIMEOUT_MS = 30_000;
+const RECONNECT_RETRY_WINDOW_MS = 48_000;
+const RECONNECT_RETRY_DELAY_MS = 1_000;
 
 type MultiplayerAction = "host" | "join";
 
@@ -255,6 +265,52 @@ const serverUrl = import.meta.env.VITE_SERVER_URL ||
   `${location.protocol === "https:" ? "wss" : "ws"}://${location.hostname}:2567`;
 const httpServerUrl = serverUrl.replace(/^ws/, "http");
 const deviceId = getDeviceId();
+const RECONNECT_SESSION_STORAGE_KEY = "blend-reconnect-session";
+
+interface StoredReconnectSession {
+  token: string;
+  name: string;
+  roomCode: string;
+}
+
+function saveReconnectSession(room: Room<any>, roomCodeOverride?: string): void {
+  const token = String(room.reconnectionToken ?? "");
+  if (!token) return;
+  const roomCode = String(roomCodeOverride ?? room.state?.roomCode ?? "");
+  try {
+    sessionStorage.setItem(RECONNECT_SESSION_STORAGE_KEY, JSON.stringify({
+      token,
+      name: nameInput.value.trim(),
+      roomCode: /^\d{5}$/.test(roomCode) ? roomCode : "",
+    } satisfies StoredReconnectSession));
+  } catch {
+    // Private browsing/storage restrictions should never block gameplay.
+  }
+}
+
+function readReconnectSession(): StoredReconnectSession | undefined {
+  try {
+    const raw = sessionStorage.getItem(RECONNECT_SESSION_STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as Partial<StoredReconnectSession>;
+    if (typeof parsed.token !== "string" || !parsed.token) return;
+    return {
+      token: parsed.token,
+      name: typeof parsed.name === "string" ? parsed.name : "",
+      roomCode: typeof parsed.roomCode === "string" ? parsed.roomCode : "",
+    };
+  } catch {
+    return;
+  }
+}
+
+function clearReconnectSession(): void {
+  try {
+    sessionStorage.removeItem(RECONNECT_SESSION_STORAGE_KEY);
+  } catch {
+    // Ignore storage restrictions.
+  }
+}
 
 const syncSoundTogglePlacement = (): void => {
   const inGame = !gameScreen.classList.contains("hidden");
@@ -366,14 +422,20 @@ class BackgroundMusic {
     this.meetingAudio.loop = true;
     this.meetingAudio.muted = this.muted;
     this.syncButton();
-    const unlock = () => {
+    const unlock = (event: Event) => {
+      // Do not start audio from the gesture that focuses a text field. On
+      // phones/iPads, starting HTMLAudio from the first input tap can steal
+      // focus just as the on-screen keyboard opens, making the keyboard close
+      // immediately. Keep listening and unlock from the next non-text gesture.
+      const target = event.target instanceof Element ? event.target : undefined;
+      if (target?.closest('input, textarea, select, [contenteditable="true"], label')) return;
       this.started = true;
       if (!this.muted && !this.meetingActive && this.audio.paused) this.playNext();
       window.removeEventListener("pointerdown", unlock);
       window.removeEventListener("keydown", unlock);
     };
-    window.addEventListener("pointerdown", unlock, { once: true });
-    window.addEventListener("keydown", unlock, { once: true });
+    window.addEventListener("pointerdown", unlock);
+    window.addEventListener("keydown", unlock);
     soundToggle.addEventListener("click", (event) => {
       event.stopPropagation();
       this.started = true;
@@ -486,6 +548,11 @@ function isTerminalConnectionError(error: unknown): boolean {
   return /room not found|room full|24 players|24 participants|removed from this room|different name|player name is already|name is already being used|already connected|other game tab|device could not be identified|invalid name|forbidden|unauthori[sz]ed|game is locked/i.test(message);
 }
 
+function isTerminalReconnectError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /seat reservation|reconnect(?:ion)?[^ ]*(?:expired|invalid|not found)|invalid[^ ]*(?:session|token)|room not found|room does not exist|forbidden|unauthori[sz]ed/i.test(message);
+}
+
 function formatConnectionError(error: unknown): string {
   const message = error instanceof Error ? error.message : "Could not connect to the server.";
   if (/full|24 players|24 participants/i.test(message)) {
@@ -549,6 +616,95 @@ function openRoomWithTimeout(
       reject(error);
     });
   });
+}
+
+async function reconnectRoomWithRetry(reconnectionToken: string): Promise<OpenedMultiplayerRoom> {
+  const deadline = Date.now() + RECONNECT_RETRY_WINDOW_MS;
+  let stopped = false;
+  let lastError: unknown;
+
+  const retryLoop = async (): Promise<OpenedMultiplayerRoom> => {
+    while (!stopped && Date.now() < deadline) {
+      // Safari/Chrome can report the WebSocket failure immediately while Wi-Fi
+      // is changing access points. Wait until the browser thinks it is online
+      // before spending another reconnect attempt.
+      if (navigator.onLine === false) {
+        await wait(Math.min(750, Math.max(0, deadline - Date.now())));
+        continue;
+      }
+
+      const reconnectClient = new Client(serverUrl);
+      try {
+        const restoredRoom = await reconnectClient.reconnect(reconnectionToken);
+        if (stopped) {
+          void restoredRoom.leave(true);
+          throw new Error("Reconnect window ended.");
+        }
+        return { client: reconnectClient, room: restoredRoom };
+      } catch (error) {
+        lastError = error;
+        // The server deliberately invalidates the old reconnection seat after
+        // a wrong Maths answer + disconnect. Do not make that player wait out
+        // the whole Wi-Fi retry window; return to sign-in so their fresh join
+        // can immediately enter the current round as a spectator.
+        if (isTerminalReconnectError(error) || Date.now() >= deadline) break;
+        await wait(Math.min(RECONNECT_RETRY_DELAY_MS, Math.max(0, deadline - Date.now())));
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error("Reconnect timed out.");
+  };
+
+  const timeout = new Promise<never>((_, reject) => {
+    window.setTimeout(() => {
+      stopped = true;
+      reject(new Error("Reconnect timed out."));
+    }, RECONNECT_RETRY_WINDOW_MS);
+  });
+
+  return Promise.race([retryLoop(), timeout]);
+}
+
+async function restoreRoomAfterRefresh(): Promise<void> {
+  const stored = readReconnectSession();
+  if (!stored || activeRoom || connectionInProgress) return;
+
+  connectionInProgress = true;
+  const requestId = ++connectionRequestId;
+  if (stored.name) {
+    nameInput.value = stored.name;
+    localStorage.setItem("blend-player-name", stored.name);
+  }
+  if (/^\d{5}$/.test(stored.roomCode)) roomInput.value = stored.roomCode;
+  setConnectionControlsBusy("join", true);
+  formMessage.textContent = "RESTORING YOUR PREVIOUS GAME CONNECTION...";
+
+  try {
+    const opened = await reconnectRoomWithRetry(stored.token);
+    if (requestId !== connectionRequestId) {
+      void opened.room.leave(true);
+      return;
+    }
+    arenaEntryGeneration += 1;
+    activeRoom = opened.room;
+    bindRoom(opened.room, opened.client);
+    titleScreen.classList.add("hidden");
+    lobbyScreen.classList.remove("hidden");
+    updateLobby();
+    if (["loading", "reveal", "game", "discussion", "voting", "verdict", "results"]
+      .includes(String(opened.room.state.phase))) {
+      requestEnterMultiplayerArena(opened.room);
+    }
+  } catch {
+    if (requestId === connectionRequestId) {
+      clearReconnectSession();
+      formMessage.textContent = "Your previous connection has ended. Enter the room code to rejoin.";
+    }
+  } finally {
+    if (requestId === connectionRequestId) {
+      connectionInProgress = false;
+      setConnectionControlsBusy("join", false);
+    }
+  }
 }
 
 async function connectMultiplayer(action: MultiplayerAction): Promise<void> {
@@ -628,11 +784,13 @@ async function connectMultiplayer(action: MultiplayerAction): Promise<void> {
 }
 
 function bindRoom(room: Room<any>, client: Client): void {
+  saveReconnectSession(room);
   connectionStatus.textContent = "CONNECTED";
   connectionStatus.classList.add("online");
   room.onMessage("room-info", ({ roomCode }: { roomCode: string }) => {
     if (!isCurrentRoom(room)) return;
     lobbyCode.textContent = roomCode;
+    saveReconnectSession(room, roomCode);
   });
   room.onMessage("role", ({
     role,
@@ -821,6 +979,7 @@ function bindRoom(room: Room<any>, client: Client): void {
   room.onLeave(async (code) => {
     if (activeRoom !== room) return;
     if (code === 4001) {
+      clearReconnectSession();
       // A host removal requires a new name before this browser can rejoin the
       // same room. Clear the saved value so the player cannot accidentally
       // submit the removed name again without editing it.
@@ -836,26 +995,27 @@ function bindRoom(room: Room<any>, client: Client): void {
     connectionStatus.classList.remove("online");
     showSceneLoading("Connection interrupted. Reconnecting to the same match...");
     try {
-      const restored = await Promise.race([
-        client.reconnect(room.reconnectionToken),
-        new Promise<never>((_, reject) => window.setTimeout(
-          () => reject(new Error("Reconnect timed out.")),
-          RECONNECT_TIMEOUT_MS,
-        )),
-      ]);
+      const restored = await reconnectRoomWithRetry(room.reconnectionToken);
       if (activeRoom !== room) {
-        void restored.leave(true);
+        void restored.room.leave(true);
         return;
       }
-      activeRoom = restored;
-      game?.setRoom(restored);
-      bindRoom(restored, client);
-      safeRoomSend(restored, "maths-resume");
+      activeRoom = restored.room;
+      game?.setRoom(restored.room);
+      bindRoom(restored.room, restored.client);
+      safeRoomSend(restored.room, "maths-resume");
       connectionStatus.textContent = "CONNECTED";
       connectionStatus.classList.add("online");
       hideSceneLoading();
     } catch {
-      if (activeRoom === room) leaveRoom(false, "Connection lost. Please join the room again.");
+      // The retry window is deliberately a little longer than the server's
+      // reservation window. By the time we return to sign-in, the stale name
+      // and device reservation has been released instead of trapping the user
+      // behind NAME ALREADY TAKEN / DEVICE ALREADY CONNECTED errors.
+      if (activeRoom === room) {
+        clearReconnectSession();
+        leaveRoom(false, "Connection lost. Please join the room again.");
+      }
     } finally {
       reconnecting = false;
     }
@@ -1416,7 +1576,7 @@ async function enterMultiplayerArena(room: Room<any>, generation: number): Promi
   showSceneLoading("Loading the museum...");
   arenaTitle.textContent = `ROOM ${String(room.state?.roomCode ?? "")}`;
   const playersBeforeLoad = roomPlayers(room);
-  arenaSubtitle.textContent = connectedPlayersLabel(Number(playersBeforeLoad?.size ?? 0));
+  arenaSubtitle.textContent = connectedPlayersLabel(connectedHumanCount(playersBeforeLoad));
   playerLabel.textContent = nameInput.value.trim().toUpperCase();
 
   const loadedGame = await ensureMuseumLoaded();
@@ -1517,6 +1677,7 @@ returnLobbyButton.addEventListener("click", () => safeRoomSend(activeRoom, "retu
 document.querySelector("#leave-button")!.addEventListener("click", () => leaveRoom(true));
 
 function leaveRoom(consented: boolean, message = "You left the room."): void {
+  if (consented) clearReconnectSession();
   closeMathsQuestionOverlay(true);
   arenaEntryGeneration += 1;
   hideSceneLoading();
@@ -1551,6 +1712,7 @@ nameInput.value = localStorage.getItem("blend-player-name") ?? "";
 roomInput.addEventListener("input", () => {
   roomInput.value = roomInput.value.replace(/\D/g, "").slice(0, 5);
 });
+window.setTimeout(() => void restoreRoomAfterRefresh(), 0);
 
 interface RemoteAvatar {
   root: TransformNode;
@@ -3223,7 +3385,7 @@ class PracticeGame {
     for (const [sessionId, avatar] of this.remotePlayers) {
       if (!present.has(sessionId)) this.removeRemotePlayer(sessionId, avatar);
     }
-    arenaSubtitle.textContent = connectedPlayersLabel(Number(players.size ?? 0));
+    arenaSubtitle.textContent = connectedPlayersLabel(connectedHumanCount(players));
     this.updateFlags(room, dt);
     this.updateRubbish(room);
     this.updateCrimes(room, dt);
