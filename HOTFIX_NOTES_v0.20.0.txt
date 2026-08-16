@@ -1,0 +1,24 @@
+Blend In or Bust v0.20.0 - Live Maths Flag Challenges
+
+CLIENT
+- Removed temporary host-lobby ? question test button.
+- Live Blender flag discoveries now open a random 5-choice Maths question.
+- Correct answers collect the flag; wrong answers lock A-E for 10 seconds.
+- Other Blenders near an active flag challenge see VIEW ? and can open it read-only.
+- Question overlay remains responsive on phone, iPad and laptop.
+- Correct answers are no longer included in the browser question-bank bundle; validation is server-authoritative.
+- Added 10 minute host round option.
+- Host Buster selector now supports Automatic or 1-6 Busters.
+
+SERVER
+- Server owns active Maths challenge/question/answer validation.
+- Human flags cannot be collected by walking over them; a correct Maths answer is required.
+- Busters can lift a prop hiding a flag without triggering or being told about its Maths challenge.
+- After a wrong answer, disconnect/refresh/quit ends that participant session; rejoining during the active round is CCTV spectator only.
+- Automatic balance is 1 public Buster for each complete group of 4 connected participants, with a minimum of 1 in multiplayer and a cap of 6 (24 players => 6 Busters / 18 Blenders).
+- 10 minute rounds use expanded flag and rubbish counts for larger classes.
+
+DEPLOY ORDER
+1. Deploy the updated server to Render first.
+2. Wait until Render reports the deploy is live.
+3. Upload the v0.20.0 itch.io client ZIP.

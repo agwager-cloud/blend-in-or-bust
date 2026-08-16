@@ -1,0 +1,66 @@
+BLEND IN OR BUST - MATHS QUESTION HOST-LOBBY TEST
+=================================================
+
+Scope
+-----
+Temporary host-lobby testing only. This update does NOT connect maths questions
+to flags in the museum yet and does NOT change the Buster ratio/count logic.
+No server files were changed.
+
+Question bank
+-------------
+- 100 PNG question images embedded at:
+  client/public/assets/maths/questions/
+- 100 spreadsheet rows matched to 100 PNG files with no missing or extra images.
+- Internal answer key generated at:
+  client/src/mathsQuestionBank.ts
+- Each question has answer choices A, B, C, D or E. The PNG contains the actual
+  question and displayed options; the generated bank stores the correct letter.
+
+Host lobby test
+---------------
+- A temporary host-only circular '?' button appears in the multiplayer lobby.
+- Pressing '?' selects a random question from a shuffled 100-question bank.
+- Questions cycle randomly without repeats until the bank is exhausted, then
+  the bank reshuffles.
+- A responsive full-screen question overlay appears with five large A-E buttons.
+- The question cannot be closed/skipped from the overlay; a correct answer ends it.
+
+Wrong answer behaviour
+----------------------
+- All A-E buttons are disabled immediately.
+- The chosen wrong option is highlighted.
+- A visible countdown runs 10 -> 0.
+- At 0, the answer controls are re-enabled and the same question remains.
+
+Correct answer behaviour
+------------------------
+- Correct option is highlighted.
+- Positive 'CORRECT! FLAG COLLECTED!' feedback appears.
+- Existing flag.mp3 sound effect plays (unless sound is muted).
+- The overlay closes automatically after the success feedback.
+- Host can press '?' again to load another random question.
+
+Responsive question display
+---------------------------
+- Laptop/iPad: question scales to the available question viewport.
+- Tall questions can be vertically scrolled/panned.
+- Narrow phones preserve a larger readable working width instead of shrinking
+  ~1000 px exam images until the printed text becomes tiny.
+- On narrow phones the question viewport can pan horizontally and vertically.
+- Touch uses native panning; laptop mouse users can click-drag the question area.
+- A helper message indicates when panning is required.
+
+Files changed/added
+-------------------
+client/index.html
+client/src/main.ts
+client/src/style.css
+client/src/mathsQuestionBank.ts
+client/public/assets/maths/questions/*.png (100 files)
+
+No changes
+----------
+- Buster ratio/count remains exactly as supplied in the uploaded project.
+- Museum flag collection remains unchanged for now.
+- Server remains unchanged.

@@ -1,5 +1,6 @@
 import { Client, Room, ServerError } from "colyseus";
 import { CrimeState, FlagState, GameState, PlayerState, RubbishState } from "./state.js";
+import { MATHS_QUESTION_BANK, MATHS_QUESTION_BY_ID } from "./mathsQuestionBank.js";
 import { createRoomCode, registerRoom, unregisterRoom } from "./roomDirectory.js";
 
 interface JoinOptions {
@@ -24,6 +25,15 @@ interface BotTarget {
   purpose: BotPurpose;
   propId?: string;
   targetId?: string;
+}
+
+interface MathsChallenge {
+  flagId: string;
+  containerId: string;
+  challengerSessionId: string;
+  questionId: string;
+  wrongAttemptMade: boolean;
+  lockoutUntil: number;
 }
 
 export class BlendRoom extends Room<GameState> {
@@ -54,6 +64,8 @@ export class BlendRoom extends Room<GameState> {
   private roles = new Map<string, "blender" | "seeker">();
   private lastLiftAt = new Map<string, number>();
   private liftLockedUntil = new Map<string, number>();
+  private mathsChallenges = new Map<string, MathsChallenge>();
+  private mathsQuestionDeck: string[] = [];
   private votes = new Map<string, string>();
   private roundSpawns = new Map<string, { x: number; y: number; z: number; rotation: number }>();
   private lastSpectatorConcealAt = new Map<string, number>();
@@ -109,6 +121,10 @@ export class BlendRoom extends Room<GameState> {
     this.onMessage("move", (client, message: MoveMessage) => {
       const player = this.state.players.get(client.sessionId);
       if (!player?.alive || player.isLateSpectator || this.state.phase !== "game") return;
+      if (this.mathsChallengeForPlayer(client.sessionId)) {
+        player.moving = false;
+        return;
+      }
       if (Date.now() < this.postMeetingMoveBlockedUntil) return;
       player.x = this.safeNumber(message.x, player.x);
       player.y = this.safeNumber(message.y, player.y);
@@ -120,7 +136,7 @@ export class BlendRoom extends Room<GameState> {
     });
     this.onMessage("disguise", (client, value: unknown) => {
       const player = this.state.players.get(client.sessionId);
-      if (!player?.alive || this.state.phase !== "game") return;
+      if (!player?.alive || this.state.phase !== "game" || this.mathsChallengeForPlayer(client.sessionId)) return;
       // Imported museum prop identifiers can exceed 24 characters. Truncating
       // them made the disguising player see the correct local clone while
       // remote clients could not find the shortened prop name and displayed
@@ -180,6 +196,7 @@ export class BlendRoom extends Room<GameState> {
         target.alive = false;
         target.moving = false;
         target.disguise = "";
+        this.cancelMathsChallengeForPlayer(requestedTargetId, "player-busted");
         target.spectateUnlockAt = now + 15_000;
         target.spectateTarget = "";
         if (target.isBot) this.clearBotRuntimeState(requestedTargetId);
@@ -216,7 +233,8 @@ export class BlendRoom extends Room<GameState> {
     this.onMessage("lift", (client, containerId: unknown) => {
       if (typeof containerId !== "string" || this.state.phase !== "game") return;
       const player = this.state.players.get(client.sessionId);
-      if (!player?.alive || player.isBot) return;
+      if (!player?.alive || player.isBot || player.isLateSpectator) return;
+      if (this.mathsChallengeForPlayer(client.sessionId)) return;
       const liftedPlayerId = containerId.startsWith("player:")
         ? containerId.slice("player:".length)
         : "";
@@ -239,26 +257,111 @@ export class BlendRoom extends Room<GameState> {
       if (now - (this.lastLiftAt.get(client.sessionId) ?? 0) < 900) return;
       this.lastLiftAt.set(client.sessionId, now);
       this.liftLockedUntil.set(client.sessionId, now + BlendRoom.LIFT_BLEND_LOCK_MS);
+
       const flag = [...this.state.flags.values()].find((candidate) =>
         !candidate.found && candidate.containerId === containerId);
-      const seekerFoundFlag = Boolean(flag) && this.roles.get(client.sessionId) === "seeker";
-      if (flag && seekerFoundFlag) {
-        flag.found = true;
-        this.state.flagsFound += 1;
+      const isBlender = this.roles.get(client.sessionId) === "seeker";
+
+      // Public Busters use the legacy internal "blender" role. They may still
+      // lift props to disguise themselves, but a hidden flag must remain secret
+      // and can never trigger a Maths challenge for them.
+      if (!flag || !isBlender) {
+        client.send("lifted", { containerId, flagId: "", by: player.name, collected: false });
+        return;
       }
+
+      const existing = this.mathsChallenges.get(flag.id);
+      if (existing) {
+        this.sendMathsQuestion(client, existing, existing.challengerSessionId === client.sessionId);
+        return;
+      }
+
+      const challenge = this.startMathsChallenge(client.sessionId, flag);
+      if (!challenge) return;
       client.send("lifted", {
         containerId,
-        flagId: flag?.id ?? "",
+        flagId: flag.id,
         by: player.name,
-        collected: seekerFoundFlag,
+        collected: false,
+        questionStarted: true,
       });
-      if (seekerFoundFlag) this.checkBlenderObjectiveWin();
+      this.sendMathsQuestion(client, challenge, true);
+    });
+    this.onMessage("view-question", (client, flagId: unknown) => {
+      if (typeof flagId !== "string" || this.state.phase !== "game") return;
+      const player = this.state.players.get(client.sessionId);
+      const flag = this.state.flags.get(flagId);
+      const challenge = this.mathsChallenges.get(flagId);
+      if (!player?.alive || player.isBot || player.isLateSpectator
+        || this.roles.get(client.sessionId) !== "seeker" || !flag || !challenge) return;
+      if (Math.hypot(player.x - flag.x, player.z - flag.z) > 3.25) return;
+      this.sendMathsQuestion(client, challenge, challenge.challengerSessionId === client.sessionId);
+    });
+    this.onMessage("maths-answer", (client, value: unknown) => {
+      if (typeof value !== "object" || !value || this.state.phase !== "game") return;
+      const payload = value as { flagId?: unknown; answer?: unknown };
+      const flagId = typeof payload.flagId === "string" ? payload.flagId : "";
+      const answer = typeof payload.answer === "string" ? payload.answer.toUpperCase() : "";
+      if (!flagId || !["A", "B", "C", "D", "E"].includes(answer)) return;
+      const challenge = this.mathsChallenges.get(flagId);
+      const player = this.state.players.get(client.sessionId);
+      if (!challenge || challenge.challengerSessionId !== client.sessionId
+        || !player?.alive || player.isBot || player.isLateSpectator
+        || this.roles.get(client.sessionId) !== "seeker") return;
+      const now = Date.now();
+      if (now < challenge.lockoutUntil) {
+        client.send("maths-challenge-lockout", {
+          flagId,
+          lockoutUntil: challenge.lockoutUntil,
+          challengerSessionId: challenge.challengerSessionId,
+          challengerName: player.name,
+        });
+        return;
+      }
+      const question = MATHS_QUESTION_BY_ID.get(challenge.questionId);
+      if (!question) {
+        this.cancelMathsChallenge(flagId, "question-error");
+        return;
+      }
+      if (answer === question.correctAnswer) {
+        const flag = this.state.flags.get(flagId);
+        if (!flag || flag.found) {
+          this.cancelMathsChallenge(flagId, "flag-unavailable");
+          return;
+        }
+        flag.found = true;
+        flag.challengeActive = false;
+        flag.challengerSessionId = "";
+        this.mathsChallenges.delete(flagId);
+        this.state.flagsFound += 1;
+        this.sendMathsChallengeToBlenders("maths-challenge-complete", {
+          flagId,
+          challengerSessionId: client.sessionId,
+          challengerName: player.name,
+        });
+        this.broadcast("flag-found", { id: flag.id, by: player.name });
+        this.checkBlenderObjectiveWin();
+        return;
+      }
+
+      challenge.wrongAttemptMade = true;
+      challenge.lockoutUntil = now + 10_000;
+      this.sendMathsChallengeToBlenders("maths-challenge-lockout", {
+        flagId,
+        lockoutUntil: challenge.lockoutUntil,
+        challengerSessionId: challenge.challengerSessionId,
+        challengerName: player.name,
+      });
+    });
+    this.onMessage("maths-resume", (client) => {
+      const challenge = this.mathsChallengeForPlayer(client.sessionId);
+      if (challenge) this.sendMathsQuestion(client, challenge, true);
     });
     this.onMessage("report", (client, crimeId: unknown) => {
       if (typeof crimeId !== "string" || this.state.phase !== "game") return;
       const reporter = this.state.players.get(client.sessionId);
       const crime = this.state.crimes.get(crimeId);
-      if (!reporter?.alive || reporter.isBot || !crime) return;
+      if (!reporter?.alive || reporter.isBot || this.mathsChallengeForPlayer(client.sessionId) || !crime) return;
       const distanceSquared = (reporter.x - crime.x) ** 2 + (reporter.z - crime.z) ** 2;
       if (distanceSquared > 2.8 ** 2) return;
       this.startMeeting(reporter.name);
@@ -455,6 +558,14 @@ export class BlendRoom extends Room<GameState> {
       this.releaseDeviceForSession(client.sessionId);
       return;
     }
+    const activeMathsChallenge = this.mathsChallengeForPlayer(client.sessionId);
+    // Once a player has submitted an incorrect answer, leaving/reloading cannot
+    // be used to dodge the 10-second penalty. End their participant session
+    // immediately; any fresh join during this round is automatically CCTV-only.
+    if (activeMathsChallenge?.wrongAttemptMade) {
+      this.removePlayerSession(client.sessionId);
+      return;
+    }
     if (!consented) {
       try {
         await this.allowReconnection(client, 45);
@@ -471,6 +582,7 @@ export class BlendRoom extends Room<GameState> {
     if (!player) return;
     const wasHost = player.isHost;
 
+    this.cancelMathsChallengeForPlayer(sessionId, "player-left");
     this.state.players.delete(sessionId);
     this.roles.delete(sessionId);
     this.votes.delete(sessionId);
@@ -519,7 +631,7 @@ export class BlendRoom extends Room<GameState> {
       balancedHumanRoles?: unknown;
     };
     const requestedRoundSeconds = Number(settings.roundSeconds);
-    this.state.roundSeconds = [180, 240, 300].includes(requestedRoundSeconds)
+    this.state.roundSeconds = [180, 240, 300, 600].includes(requestedRoundSeconds)
       ? requestedRoundSeconds
       : this.state.roundSeconds;
     this.state.blenderOverride = this.clampInteger(
@@ -539,7 +651,9 @@ export class BlendRoom extends Room<GameState> {
       .filter(([, player]) => !player.isBot && !player.isLateSpectator)
       .map(([sessionId]) => sessionId);
     if (humanSessionIds.length === 0) return;
+    this.clearMathsChallenges("new-round");
     this.roles.clear();
+    this.mathsQuestionDeck = [];
     this.lastLiftAt.clear();
     this.liftLockedUntil.clear();
     this.botTargets.clear();
@@ -590,12 +704,11 @@ export class BlendRoom extends Room<GameState> {
       .filter(([, player]) => !player.isLateSpectator)
       .map(([sessionId]) => sessionId);
     const shuffled = [...participantIds].sort(() => Math.random() - 0.5);
-    // The expanded 25-room objective needs a smaller hidden team than the old
-    // 18-room map. Automatic games now use roughly one Buster per 8-10 players,
-    // while the host can still choose a higher manual count in the lobby.
-    const automatic = participantIds.length <= 1 ? 0
-      : participantIds.length <= 10 ? 1
-        : participantIds.length <= 18 ? 2 : 3;
+    // Automatic role balance is one public Buster for every four connected
+    // participants. This scales cleanly to 6 Busters / 18 Blenders at 24 players.
+    const automatic = participantIds.length <= 1
+      ? 0
+      : Math.min(6, Math.max(1, Math.floor(participantIds.length / 4)));
     const blenderCount = Math.min(
       Math.max(0, this.state.blenderOverride || automatic),
       Math.max(0, participantIds.length - 1),
@@ -637,8 +750,8 @@ export class BlendRoom extends Room<GameState> {
       this.roles.set(sessionId, role);
     });
     // Late CCTV viewers do not increase role counts or museum objectives.
-    this.createFlags(this.flagCountForPlayers(participantIds.length));
-    this.createRubbish(this.rubbishCountForPlayers(participantIds.length));
+    this.createFlags(this.flagCountForPlayers(participantIds.length, this.state.roundSeconds));
+    this.createRubbish(this.rubbishCountForPlayers(participantIds.length, this.state.roundSeconds));
     // Choose one collective bot contribution for this round between 30% and
     // 40% of the flags. Once reached, bots keep cleaning and lifting decoy
     // props, but every remaining flag must be found by human Blenders.
@@ -831,6 +944,7 @@ export class BlendRoom extends Room<GameState> {
         target.alive = false;
         target.moving = false;
         target.disguise = "";
+        this.cancelMathsChallengeForPlayer(top[0], "player-ejected");
         target.spectateUnlockAt = Date.now();
         target.spectateTarget = "";
         const role = this.roles.get(top[0]) ?? "seeker";
@@ -860,18 +974,9 @@ export class BlendRoom extends Room<GameState> {
     return false;
   }
 
-  private tryCollectFlag(sessionId: string, player: PlayerState): void {
-    if (this.roles.get(sessionId) !== "seeker") return;
-    for (const flag of this.state.flags.values()) {
-      if (flag.found || !flag.revealed) continue;
-      const distanceSquared = (player.x - flag.x) ** 2 + (player.z - flag.z) ** 2;
-      if (distanceSquared > 1.45 ** 2) continue;
-      flag.found = true;
-      this.state.flagsFound += 1;
-      this.broadcast("flag-found", { id: flag.id, by: player.name });
-      this.checkBlenderObjectiveWin();
-      return;
-    }
+  private tryCollectFlag(_sessionId: string, _player: PlayerState): void {
+    // Human flags are now awarded only by a server-validated correct Maths
+    // answer. Walking over a revealed/hidden flag can never collect it.
   }
 
   private tryCollectRubbish(sessionId: string, player: PlayerState): void {
@@ -887,6 +992,86 @@ export class BlendRoom extends Room<GameState> {
       this.broadcast("rubbish-collected", { id: rubbish.id, by: player.name });
       this.checkBlenderObjectiveWin();
       return;
+    }
+  }
+
+  private nextMathsQuestionId(): string | undefined {
+    if (this.mathsQuestionDeck.length === 0) {
+      this.mathsQuestionDeck = MATHS_QUESTION_BANK.map((question) => question.id);
+      for (let index = this.mathsQuestionDeck.length - 1; index > 0; index -= 1) {
+        const swapIndex = Math.floor(Math.random() * (index + 1));
+        [this.mathsQuestionDeck[index], this.mathsQuestionDeck[swapIndex]] = [
+          this.mathsQuestionDeck[swapIndex],
+          this.mathsQuestionDeck[index],
+        ];
+      }
+    }
+    return this.mathsQuestionDeck.pop();
+  }
+
+  private mathsChallengeForPlayer(sessionId: string): MathsChallenge | undefined {
+    return [...this.mathsChallenges.values()]
+      .find((challenge) => challenge.challengerSessionId === sessionId);
+  }
+
+  private startMathsChallenge(sessionId: string, flag: FlagState): MathsChallenge | undefined {
+    const questionId = this.nextMathsQuestionId();
+    if (!questionId) return undefined;
+    const challenge: MathsChallenge = {
+      flagId: flag.id,
+      containerId: flag.containerId,
+      challengerSessionId: sessionId,
+      questionId,
+      wrongAttemptMade: false,
+      lockoutUntil: 0,
+    };
+    this.mathsChallenges.set(flag.id, challenge);
+    flag.challengeActive = true;
+    flag.challengerSessionId = sessionId;
+    const player = this.state.players.get(sessionId);
+    if (player) player.moving = false;
+    return challenge;
+  }
+
+  private sendMathsQuestion(client: Client, challenge: MathsChallenge, canAnswer: boolean): void {
+    const challenger = this.state.players.get(challenge.challengerSessionId);
+    client.send("maths-question", {
+      flagId: challenge.flagId,
+      questionId: challenge.questionId,
+      challengerSessionId: challenge.challengerSessionId,
+      challengerName: challenger?.name ?? "A Blender",
+      canAnswer,
+      lockoutUntil: challenge.lockoutUntil,
+    });
+  }
+
+  private sendMathsChallengeToBlenders(type: string, payload: Record<string, unknown>): void {
+    for (const client of this.clients) {
+      if (this.roles.get(client.sessionId) !== "seeker") continue;
+      client.send(type, payload);
+    }
+  }
+
+  private cancelMathsChallenge(flagId: string, reason: string): void {
+    const challenge = this.mathsChallenges.get(flagId);
+    if (!challenge) return;
+    const flag = this.state.flags.get(flagId);
+    if (flag) {
+      flag.challengeActive = false;
+      flag.challengerSessionId = "";
+    }
+    this.mathsChallenges.delete(flagId);
+    this.sendMathsChallengeToBlenders("maths-challenge-cancelled", { flagId, reason });
+  }
+
+  private cancelMathsChallengeForPlayer(sessionId: string, reason: string): void {
+    const challenge = this.mathsChallengeForPlayer(sessionId);
+    if (challenge) this.cancelMathsChallenge(challenge.flagId, reason);
+  }
+
+  private clearMathsChallenges(reason: string): void {
+    for (const flagId of [...this.mathsChallenges.keys()]) {
+      this.cancelMathsChallenge(flagId, reason);
     }
   }
 
@@ -947,6 +1132,8 @@ export class BlendRoom extends Room<GameState> {
       flag.x = candidate.x;
       flag.z = candidate.z;
       flag.revealed = false;
+      flag.challengeActive = false;
+      flag.challengerSessionId = "";
       this.state.flags.set(flag.id, flag);
     });
     this.state.flagsRequired = Math.min(count, selected.length);
@@ -1122,7 +1309,15 @@ export class BlendRoom extends Room<GameState> {
     return positions;
   }
 
-  private flagCountForPlayers(players: number): number {
+  private flagCountForPlayers(players: number, roundSeconds: number): number {
+    if (roundSeconds >= 600) {
+      if (players <= 3) return 5;
+      if (players <= 5) return 6;
+      if (players <= 10) return 8;
+      if (players <= 15) return 10;
+      if (players <= 20) return 12;
+      return 14;
+    }
     if (players <= 3) return 3;
     if (players <= 5) return 4;
     if (players <= 10) return 5;
@@ -1131,10 +1326,17 @@ export class BlendRoom extends Room<GameState> {
     return 8;
   }
 
-  private rubbishCountForPlayers(players: number): number {
-    // Extra paper balls make the cleanup objective visually present throughout
-    // the 5x5 museum. The larger pickup radius and smarter Blender bots keep
-    // the increased count achievable.
+  private rubbishCountForPlayers(players: number, roundSeconds: number): number {
+    // Ten-minute rounds are designed for larger classes, so the museum contains
+    // substantially more cleanup without changing the density of short games.
+    if (roundSeconds >= 600) {
+      if (players <= 3) return 20;
+      if (players <= 5) return 26;
+      if (players <= 10) return 36;
+      if (players <= 15) return 42;
+      if (players <= 20) return 48;
+      return 54;
+    }
     if (players <= 3) return 14;
     if (players <= 5) return 18;
     if (players <= 10) return 24;
@@ -1145,6 +1347,7 @@ export class BlendRoom extends Room<GameState> {
 
   private finishRound(winner: "seekers" | "blenders"): void {
     if (this.state.phase === "results") return;
+    this.clearMathsChallenges("round-ended");
     this.state.winner = winner;
     this.state.phase = "results";
     this.state.revealSecondsRemaining = 0;
@@ -1159,6 +1362,8 @@ export class BlendRoom extends Room<GameState> {
 
   private resetToLobby(): void {
     this.removeBots();
+    this.clearMathsChallenges("lobby-reset");
+    this.mathsQuestionDeck = [];
     this.roles.clear();
     this.votes.clear();
     this.roundSpawns.clear();

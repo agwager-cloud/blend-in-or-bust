@@ -1,0 +1,33 @@
+Blend In or Bust v0.20.0 - Deploy
+
+IMPORTANT DEPLOY ORDER
+1. Push/deploy the server first.
+2. Wait for Render to finish deploying the new server.
+3. Build and upload the itch.io client.
+
+SERVER - GitHub (run from the project root)
+  git status
+  git add server/src/BlendRoom.ts server/src/state.ts server/src/mathsQuestionBank.ts
+  git commit -m "Add live maths flag challenges and 24-player balance"
+  git push origin main
+
+If this Git repository also tracks the client and you want GitHub to contain this complete v0.20.0 source instead, use:
+  git status
+  git add .
+  git commit -m "Add live maths flag challenges and 24-player balance"
+  git push origin main
+
+ITCH.IO BUILD ON WINDOWS
+Option A - double-click:
+  BUILD_ITCH_v0.20.0.bat
+
+Option B - PowerShell/Terminal from the project root:
+  npm install
+  powershell -ExecutionPolicy Bypass -File .\scripts\build-itch.ps1 -Version 0.20.0
+
+Expected output:
+  release\Blend-in-or-Bust-v0.20.0-itch.zip
+
+The itch build script targets:
+  https://blend-in-or-bust-server.onrender.com
+and converts it to the required secure WebSocket URL.

@@ -23,6 +23,8 @@ export class FlagState extends Schema {
   @type("number") z = 0;
   @type("boolean") revealed = false;
   @type("boolean") found = false;
+  @type("boolean") challengeActive = false;
+  @type("string") challengerSessionId = "";
 }
 
 export class RubbishState extends Schema {

@@ -1,7 +1,7 @@
 {
   "name": "blend-in-or-bust",
   "private": true,
-  "version": "0.19.27",
+  "version": "0.20.0",
   "workspaces": [
     "client",
     "server"

@@ -322,7 +322,7 @@ select {
 
 .game-overlay {
   z-index: 20;
-  position: absolute;
+  position: fixed;
   inset: 0;
   display: grid;
   place-items: center;
@@ -1564,4 +1564,239 @@ select {
 #role-reveal.role-reveal-priority {
   z-index: 180;
   pointer-events: all;
+}
+
+/* Live Maths flag challenge overlay. */
+.lobby-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.maths-question-overlay {
+  z-index: 120;
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding:
+    max(10px, env(safe-area-inset-top))
+    max(10px, env(safe-area-inset-right))
+    max(10px, env(safe-area-inset-bottom))
+    max(10px, env(safe-area-inset-left));
+  background: rgba(4, 4, 28, .92);
+  backdrop-filter: blur(8px);
+  overflow: hidden;
+}
+
+.maths-question-panel {
+  width: min(1120px, 100%);
+  height: min(92vh, 840px);
+  height: min(92dvh, 840px);
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto auto auto;
+  gap: 9px;
+  padding: clamp(12px, 2vw, 20px);
+  border: 2px solid rgba(103, 242, 255, .74);
+  border-radius: 22px;
+  background: linear-gradient(160deg, rgba(24, 19, 91, .98), rgba(9, 8, 52, .98));
+  box-shadow: 0 24px 80px rgba(0, 0, 0, .58);
+  overflow: hidden;
+}
+
+.maths-question-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.maths-question-heading h2 {
+  margin: 2px 0 0;
+  font-size: clamp(20px, 4vw, 34px);
+  line-height: 1;
+}
+
+.maths-spectator-close {
+  width: auto;
+  min-width: 118px;
+  padding: 8px 12px;
+  border: 1px solid rgba(202, 255, 79, .7);
+  border-radius: 999px;
+  color: #172216;
+  background: linear-gradient(#e6ff7d, #92e62f);
+  box-shadow: 0 4px 0 #3b7a1e;
+  font-size: 11px;
+  font-weight: 1000;
+  letter-spacing: .04em;
+}
+
+.maths-question-panel.spectating .maths-question-status {
+  border-color: rgba(103, 242, 255, .45);
+  background: rgba(11, 56, 83, .56);
+}
+
+
+.maths-question-scroll {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-x pan-y;
+  border: 2px solid rgba(255, 255, 255, .2);
+  border-radius: 14px;
+  background: #fff;
+  scrollbar-gutter: stable both-edges;
+  user-select: none;
+  cursor: default;
+}
+
+.maths-question-scroll.can-pan { cursor: grab; }
+.maths-question-scroll.dragging { cursor: grabbing; }
+
+.maths-question-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: none;
+  margin: 0;
+  pointer-events: none;
+  -webkit-user-drag: none;
+  user-select: none;
+}
+
+.maths-question-help {
+  min-height: 14px;
+  margin: 0;
+  color: #c8cdf7;
+  font-size: 11px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.maths-question-status {
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid rgba(255, 255, 255, .14);
+  border-radius: 12px;
+  color: #f0f1ff;
+  background: rgba(4, 5, 37, .64);
+  font-size: clamp(12px, 2vw, 15px);
+  font-weight: 900;
+  text-align: center;
+}
+
+.maths-question-countdown {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  border: 2px solid #ff718d;
+  border-radius: 50%;
+  color: #fff;
+  background: rgba(164, 26, 70, .65);
+  font-size: 17px;
+}
+
+.maths-answer-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: clamp(6px, 1.4vw, 12px);
+}
+
+.maths-answer-grid button {
+  min-height: clamp(48px, 7vh, 64px);
+  padding: 7px;
+  border: 2px solid rgba(255, 255, 255, .18);
+  border-radius: 14px;
+  font-size: clamp(22px, 4vw, 34px);
+  line-height: 1;
+}
+
+.maths-answer-grid button:disabled {
+  cursor: not-allowed;
+  opacity: .48;
+  filter: grayscale(.35);
+  transform: none;
+  box-shadow: 0 5px 0 #2d176f, 0 8px 18px rgba(0, 0, 0, .18);
+}
+
+.maths-answer-grid button.wrong,
+.maths-answer-grid button.wrong:disabled {
+  opacity: 1;
+  border-color: #ff9bb0;
+  color: #fff;
+  background: linear-gradient(#ff6f8d, #c62858);
+  box-shadow: 0 5px 0 #751337;
+  filter: none;
+}
+
+.maths-answer-grid button.correct,
+.maths-answer-grid button.correct:disabled {
+  opacity: 1;
+  border-color: #e2ff9a;
+  color: #172216;
+  background: linear-gradient(#dfff72, #79d92d);
+  box-shadow: 0 5px 0 #3b7a1e;
+  filter: none;
+}
+
+.maths-question-panel.locked .maths-question-status {
+  border-color: rgba(255, 113, 141, .58);
+  background: rgba(91, 14, 45, .64);
+}
+
+.maths-question-panel.success {
+  border-color: rgba(202, 255, 79, .92);
+  box-shadow: 0 0 0 4px rgba(202, 255, 79, .12), 0 24px 80px rgba(0, 0, 0, .58);
+}
+
+.maths-question-panel.success .maths-question-status {
+  border-color: rgba(202, 255, 79, .72);
+  color: #172216;
+  background: #caff4f;
+  font-size: clamp(16px, 3vw, 23px);
+}
+
+@media (max-width: 600px) {
+  .maths-question-overlay { padding: 6px; }
+  .maths-question-panel {
+    width: 100%;
+    height: calc(100dvh - 12px);
+    max-height: none;
+    gap: 6px;
+    padding: 9px;
+    border-radius: 15px;
+  }
+  .maths-question-heading .eyebrow { font-size: 8px; }
+  .maths-spectator-close { min-width: 96px; padding: 6px 9px; font-size: 9px; }
+  .maths-question-help { font-size: 9px; }
+  .maths-question-status { min-height: 38px; padding: 5px 8px; }
+  .maths-answer-grid { gap: 5px; }
+  .maths-answer-grid button { min-height: 46px; border-radius: 10px; }
+
+  /* Portrait phones are too narrow to shrink a ~1000 px exam image all the
+     way to the screen width without making its printed text tiny. Preserve a
+     readable working width and let the question viewport pan in both axes. */
+  .maths-question-image { width: max(100%, 640px); }
+}
+
+@media (max-height: 480px) {
+  .maths-question-panel {
+    height: calc(100dvh - 8px);
+    gap: 4px;
+    padding: 7px;
+  }
+  .maths-question-heading h2 { font-size: 19px; }
+  .maths-question-heading .eyebrow { display: none; }
+  .maths-question-help { display: none; }
+  .maths-question-status { min-height: 34px; padding: 4px 7px; font-size: 11px; }
+  .maths-question-countdown { width: 30px; height: 30px; flex-basis: 30px; font-size: 14px; }
+  .maths-answer-grid button { min-height: 42px; font-size: 22px; }
 }

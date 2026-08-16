@@ -24,6 +24,7 @@ import {
 import "@babylonjs/loaders";
 import { Client, Room } from "colyseus.js";
 import "./style.css";
+import { MATHS_QUESTION_BANK, type MathsQuestion, type MathsQuestionAnswer } from "./mathsQuestionBank";
 
 const assetUrl = (path: string): string =>
   `${import.meta.env.BASE_URL}${path.replace(/^\/+/, "")}`;
@@ -84,6 +85,15 @@ const lobbyMessage = document.querySelector<HTMLElement>("#lobby-message")!;
 const playerList = document.querySelector<HTMLElement>("#player-list")!;
 const connectionStatus = document.querySelector<HTMLElement>("#connection-status")!;
 const startButton = document.querySelector<HTMLButtonElement>("#start-button")!;
+const mathsQuestionOverlay = document.querySelector<HTMLElement>("#maths-question-overlay")!;
+const mathsQuestionPanel = document.querySelector<HTMLElement>("#maths-question-panel")!;
+const mathsQuestionScroll = document.querySelector<HTMLElement>("#maths-question-scroll")!;
+const mathsQuestionImage = document.querySelector<HTMLImageElement>("#maths-question-image")!;
+const mathsQuestionHelp = document.querySelector<HTMLElement>("#maths-question-help")!;
+const mathsQuestionFeedback = document.querySelector<HTMLElement>("#maths-question-feedback")!;
+const mathsQuestionCountdown = document.querySelector<HTMLElement>("#maths-question-countdown")!;
+const mathsSpectatorClose = document.querySelector<HTMLButtonElement>("#maths-spectator-close")!;
+const mathsAnswerButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-maths-answer]"));
 const remoteLabels = document.querySelector<HTMLElement>("#remote-labels")!;
 const arenaTitle = document.querySelector<HTMLElement>("#arena-title")!;
 const arenaSubtitle = document.querySelector<HTMLElement>("#arena-subtitle")!;
@@ -157,6 +167,20 @@ let roleAutoContinueAt = 0;
 let roleAutoContinueInterval: number | undefined;
 let roleAutoContinueTimeout: number | undefined;
 let awaitingLoadingPhaseAfterRoleMessage = false;
+let currentMathsQuestion: MathsQuestion | undefined;
+let currentMathsFlagId = "";
+let mathsQuestionMode: "none" | "answering" | "spectating" = "none";
+let mathsQuestionChallengerName = "";
+let mathsQuestionLockoutUntil = 0;
+let pendingMathsAnswer: MathsQuestionAnswer | undefined;
+let mathsLockoutInterval: number | undefined;
+let mathsSuccessTimeout: number | undefined;
+let mathsUnlockTimeout: number | undefined;
+let mathsMouseDragActive = false;
+let mathsMouseDragStartX = 0;
+let mathsMouseDragStartY = 0;
+let mathsMouseDragScrollLeft = 0;
+let mathsMouseDragScrollTop = 0;
 
 const ROLE_AUTO_CONTINUE_FALLBACK_MS = 12_000;
 const SERVER_WAKE_WINDOW_MS = 60_000;
@@ -705,21 +729,71 @@ function bindRoom(room: Room<any>, client: Client): void {
     containerId,
     flagId,
     collected,
+    questionStarted,
   }: {
     containerId: string;
     flagId: string;
     collected?: boolean;
+    questionStarted?: boolean;
   }) => {
     if (!isCurrentRoom(room)) return;
     game?.handleLifted(containerId, flagId, Boolean(collected));
     game?.showObjectiveNotice(
-      collected
-        ? "You found a hidden flag!"
-        : flagId
-          ? "A flag is hidden here - only a Blender can collect it."
+      questionStarted
+        ? "Hidden flag! Answer the Maths question correctly to collect it."
+        : collected
+          ? "You found a hidden flag!"
           : "Nothing was hidden here.",
-      collected ? 5000 : 2600,
+      questionStarted || collected ? 4200 : 2600,
     );
+  });
+  room.onMessage("maths-question", ({
+    flagId,
+    questionId,
+    challengerName,
+    canAnswer,
+    lockoutUntil,
+  }: {
+    flagId: string;
+    questionId: string;
+    challengerName: string;
+    canAnswer: boolean;
+    lockoutUntil?: number;
+  }) => {
+    if (!isCurrentRoom(room) || localRole !== "seeker") return;
+    openLiveMathsQuestion({ flagId, questionId, challengerName, canAnswer, lockoutUntil });
+  });
+  room.onMessage("maths-challenge-lockout", ({
+    flagId,
+    lockoutUntil,
+    challengerName,
+  }: {
+    flagId: string;
+    lockoutUntil: number;
+    challengerName: string;
+  }) => {
+    if (!isCurrentRoom(room) || currentMathsFlagId !== flagId) return;
+    if (challengerName) mathsQuestionChallengerName = challengerName;
+    const selectedButton = mathsQuestionMode === "answering" && pendingMathsAnswer
+      ? mathsAnswerButtons.find((button) => button.dataset.mathsAnswer === pendingMathsAnswer)
+      : undefined;
+    beginMathsWrongAnswerLockout(Number(lockoutUntil) || Date.now() + 10_000, selectedButton);
+    pendingMathsAnswer = undefined;
+  });
+  room.onMessage("maths-challenge-complete", ({
+    flagId,
+    challengerName,
+  }: {
+    flagId: string;
+    challengerName: string;
+  }) => {
+    if (!isCurrentRoom(room) || currentMathsFlagId !== flagId) return;
+    completeLiveMathsQuestion(challengerName);
+  });
+  room.onMessage("maths-challenge-cancelled", ({ flagId }: { flagId: string; reason?: string }) => {
+    if (!isCurrentRoom(room) || currentMathsFlagId !== flagId) return;
+    closeMathsQuestionOverlay(true);
+    game?.showObjectiveNotice("That flag challenge is available again.", 2400);
   });
   room.onStateChange(() => {
     if (!isCurrentRoom(room)) return;
@@ -776,6 +850,7 @@ function bindRoom(room: Room<any>, client: Client): void {
       activeRoom = restored;
       game?.setRoom(restored);
       bindRoom(restored, client);
+      safeRoomSend(restored, "maths-resume");
       connectionStatus.textContent = "CONNECTED";
       connectionStatus.classList.add("online");
       hideSceneLoading();
@@ -786,6 +861,230 @@ function bindRoom(room: Room<any>, client: Client): void {
     }
   });
 }
+
+function clearMathsQuestionTimers(): void {
+  if (mathsLockoutInterval !== undefined) {
+    window.clearInterval(mathsLockoutInterval);
+    mathsLockoutInterval = undefined;
+  }
+  if (mathsSuccessTimeout !== undefined) {
+    window.clearTimeout(mathsSuccessTimeout);
+    mathsSuccessTimeout = undefined;
+  }
+  if (mathsUnlockTimeout !== undefined) {
+    window.clearTimeout(mathsUnlockTimeout);
+    mathsUnlockTimeout = undefined;
+  }
+}
+
+function setMathsAnswersDisabled(disabled: boolean): void {
+  mathsAnswerButtons.forEach((button) => {
+    button.disabled = disabled;
+  });
+}
+
+function resetMathsAnswerStyles(): void {
+  mathsAnswerButtons.forEach((button) => {
+    button.classList.remove("wrong", "correct");
+  });
+}
+
+function updateMathsQuestionPanHint(): void {
+  window.requestAnimationFrame(() => {
+    const vertical = mathsQuestionScroll.scrollHeight > mathsQuestionScroll.clientHeight + 3;
+    const horizontal = mathsQuestionScroll.scrollWidth > mathsQuestionScroll.clientWidth + 3;
+    mathsQuestionHelp.textContent = vertical || horizontal
+      ? "Drag the question to view the full image."
+      : "The full question is visible.";
+    mathsQuestionScroll.classList.toggle("can-pan", vertical || horizontal);
+  });
+}
+
+function closeMathsQuestionOverlay(immediate = false): void {
+  clearMathsQuestionTimers();
+  currentMathsQuestion = undefined;
+  currentMathsFlagId = "";
+  mathsQuestionMode = "none";
+  mathsQuestionChallengerName = "";
+  mathsQuestionLockoutUntil = 0;
+  pendingMathsAnswer = undefined;
+  mathsQuestionOverlay.classList.add("hidden");
+  mathsQuestionPanel.classList.remove("success", "locked", "spectating");
+  mathsQuestionCountdown.classList.add("hidden");
+  mathsSpectatorClose.classList.add("hidden");
+  mathsQuestionFeedback.textContent = "Choose the correct answer to collect the flag.";
+  setMathsAnswersDisabled(false);
+  resetMathsAnswerStyles();
+  if (immediate) mathsQuestionImage.removeAttribute("src");
+}
+
+function updateMathsOverlayForPhase(phase: string): void {
+  if (!currentMathsQuestion) return;
+  if (phase === "lobby" || phase === "results") {
+    closeMathsQuestionOverlay(true);
+    return;
+  }
+  // Meetings take visual priority, but the server keeps the challenge owned by
+  // the same Blender. The question reappears automatically when play resumes.
+  mathsQuestionOverlay.classList.toggle("hidden", phase !== "game");
+}
+
+function openLiveMathsQuestion({
+  flagId,
+  questionId,
+  challengerName,
+  canAnswer,
+  lockoutUntil = 0,
+}: {
+  flagId: string;
+  questionId: string;
+  challengerName: string;
+  canAnswer: boolean;
+  lockoutUntil?: number;
+}): void {
+  const question = MATHS_QUESTION_BANK.find((candidate) => candidate.id === questionId);
+  if (!question || !flagId) return;
+  clearMathsQuestionTimers();
+  currentMathsQuestion = question;
+  currentMathsFlagId = flagId;
+  mathsQuestionMode = canAnswer ? "answering" : "spectating";
+  mathsQuestionChallengerName = challengerName || "A Blender";
+  mathsQuestionLockoutUntil = Math.max(0, Number(lockoutUntil) || 0);
+  pendingMathsAnswer = undefined;
+  resetMathsAnswerStyles();
+  mathsQuestionPanel.classList.remove("success", "locked");
+  mathsQuestionPanel.classList.toggle("spectating", !canAnswer);
+  mathsSpectatorClose.classList.toggle("hidden", canAnswer);
+  mathsQuestionCountdown.classList.add("hidden");
+  mathsQuestionCountdown.textContent = "10";
+  mathsQuestionFeedback.textContent = canAnswer
+    ? "Choose the correct answer to collect the flag."
+    : `READ ONLY - ${mathsQuestionChallengerName} is answering. Help them choose the correct answer.`;
+  mathsQuestionScroll.scrollTop = 0;
+  mathsQuestionScroll.scrollLeft = 0;
+  mathsQuestionImage.src = assetUrl(`assets/maths/questions/${question.imageFilename}`);
+  mathsQuestionImage.alt = "Multiple choice maths question";
+  mathsQuestionOverlay.classList.remove("hidden");
+  setMathsAnswersDisabled(!canAnswer);
+  updateMathsQuestionPanHint();
+  if (mathsQuestionLockoutUntil > Date.now()) beginMathsWrongAnswerLockout(mathsQuestionLockoutUntil);
+}
+
+function beginMathsWrongAnswerLockout(lockoutUntil: number, selectedButton?: HTMLButtonElement): void {
+  clearMathsQuestionTimers();
+  mathsQuestionLockoutUntil = lockoutUntil;
+  setMathsAnswersDisabled(true);
+  resetMathsAnswerStyles();
+  if (selectedButton) selectedButton.classList.add("wrong");
+  mathsQuestionPanel.classList.add("locked");
+  mathsQuestionCountdown.classList.remove("hidden");
+
+  const refresh = () => {
+    const secondsRemaining = Math.max(0, Math.ceil((mathsQuestionLockoutUntil - Date.now()) / 1000));
+    mathsQuestionCountdown.textContent = String(secondsRemaining);
+    if (secondsRemaining > 0) {
+      mathsQuestionFeedback.textContent = mathsQuestionMode === "answering"
+        ? "Incorrect. Try again when the countdown reaches 0."
+        : `${mathsQuestionChallengerName} answered incorrectly. They can try again when the countdown reaches 0.`;
+      return;
+    }
+    if (mathsLockoutInterval !== undefined) {
+      window.clearInterval(mathsLockoutInterval);
+      mathsLockoutInterval = undefined;
+    }
+    mathsQuestionFeedback.textContent = mathsQuestionMode === "answering"
+      ? "0 - get ready to try again."
+      : `${mathsQuestionChallengerName} can try again now.`;
+    mathsUnlockTimeout = window.setTimeout(() => {
+      mathsUnlockTimeout = undefined;
+      mathsQuestionPanel.classList.remove("locked");
+      mathsQuestionCountdown.classList.add("hidden");
+      resetMathsAnswerStyles();
+      if (mathsQuestionMode === "answering") {
+        mathsQuestionFeedback.textContent = "Try again - choose A, B, C, D or E.";
+        setMathsAnswersDisabled(false);
+      } else {
+        mathsQuestionFeedback.textContent = `READ ONLY - ${mathsQuestionChallengerName} is answering. Help them choose the correct answer.`;
+        setMathsAnswersDisabled(true);
+      }
+    }, 300);
+  };
+  refresh();
+  mathsLockoutInterval = window.setInterval(refresh, 200);
+}
+
+function completeLiveMathsQuestion(challengerName: string): void {
+  clearMathsQuestionTimers();
+  setMathsAnswersDisabled(true);
+  resetMathsAnswerStyles();
+  if (mathsQuestionMode === "answering" && pendingMathsAnswer) {
+    mathsAnswerButtons.find((button) => button.dataset.mathsAnswer === pendingMathsAnswer)?.classList.add("correct");
+  }
+  mathsQuestionPanel.classList.remove("locked");
+  mathsQuestionPanel.classList.add("success");
+  mathsQuestionCountdown.classList.add("hidden");
+  mathsQuestionFeedback.textContent = mathsQuestionMode === "answering"
+    ? "🚩 CORRECT! FLAG COLLECTED!"
+    : `🚩 ${challengerName || mathsQuestionChallengerName} answered correctly - flag collected!`;
+  playSoundEffect(assetUrl("assets/flag.mp3"), 0.9);
+  if (mathsQuestionMode === "answering") game?.showFlagFoundCelebration();
+  mathsSuccessTimeout = window.setTimeout(() => closeMathsQuestionOverlay(), 1600);
+}
+
+function submitMathsQuestionAnswer(answer: MathsQuestionAnswer, button: HTMLButtonElement): void {
+  if (!currentMathsQuestion || !currentMathsFlagId || mathsQuestionMode !== "answering" || button.disabled) return;
+  if (Date.now() < mathsQuestionLockoutUntil) return;
+  pendingMathsAnswer = answer;
+  setMathsAnswersDisabled(true);
+  resetMathsAnswerStyles();
+  mathsQuestionFeedback.textContent = "Checking answer...";
+  if (!safeRoomSend(activeRoom, "maths-answer", { flagId: currentMathsFlagId, answer })) {
+    mathsQuestionFeedback.textContent = "Connection interrupted. Reconnecting...";
+  }
+}
+
+mathsQuestionImage.addEventListener("load", () => {
+  mathsQuestionScroll.scrollTop = 0;
+  mathsQuestionScroll.scrollLeft = 0;
+  updateMathsQuestionPanHint();
+});
+
+mathsAnswerButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    const answer = button.dataset.mathsAnswer as MathsQuestionAnswer | undefined;
+    if (answer) submitMathsQuestionAnswer(answer, button);
+  });
+});
+
+mathsSpectatorClose.addEventListener("click", () => {
+  if (mathsQuestionMode === "spectating") closeMathsQuestionOverlay();
+});
+
+// Touch devices use native two-axis scrolling. Mouse users can also click-drag
+// the image viewport so the same interaction is convenient on laptops.
+mathsQuestionScroll.addEventListener("pointerdown", (event) => {
+  if (event.pointerType !== "mouse" || event.button !== 0) return;
+  mathsMouseDragActive = true;
+  mathsMouseDragStartX = event.clientX;
+  mathsMouseDragStartY = event.clientY;
+  mathsMouseDragScrollLeft = mathsQuestionScroll.scrollLeft;
+  mathsMouseDragScrollTop = mathsQuestionScroll.scrollTop;
+  mathsQuestionScroll.setPointerCapture(event.pointerId);
+  mathsQuestionScroll.classList.add("dragging");
+});
+mathsQuestionScroll.addEventListener("pointermove", (event) => {
+  if (!mathsMouseDragActive || event.pointerType !== "mouse") return;
+  mathsQuestionScroll.scrollLeft = mathsMouseDragScrollLeft - (event.clientX - mathsMouseDragStartX);
+  mathsQuestionScroll.scrollTop = mathsMouseDragScrollTop - (event.clientY - mathsMouseDragStartY);
+});
+const stopMathsMouseDrag = (event: PointerEvent) => {
+  if (!mathsMouseDragActive || event.pointerType !== "mouse") return;
+  mathsMouseDragActive = false;
+  mathsQuestionScroll.classList.remove("dragging");
+};
+mathsQuestionScroll.addEventListener("pointerup", stopMathsMouseDrag);
+mathsQuestionScroll.addEventListener("pointercancel", stopMathsMouseDrag);
+window.addEventListener("resize", updateMathsQuestionPanHint);
 
 function updateLobby(): void {
   const room = activeRoom;
@@ -841,8 +1140,8 @@ function updateRoleReveal(): void {
   const buster = localRole === "blender";
   roleTitle.textContent = buster ? "BUSTER" : "BLENDER";
   roleInstructions.textContent = buster
-    ? "You cannot collect flags or rubbish. Disguise yourself, deceive the Blenders and Bust them before they complete the museum objectives."
-    : "Find every hidden flag, clean up the rubbish, survive the Busters and report crime scenes.";
+    ? "You cannot collect flags or rubbish. Disguise yourself, deceive the Blenders and Bust them before they complete the museum objectives. Hidden flags do not trigger Maths questions for Busters."
+    : "Find hidden flags by lifting exhibits, answer a Maths question correctly to collect each flag, clean up the rubbish, survive the Busters and report crime scenes.";
   revealCard.classList.toggle("buster", buster);
   roleContinueButton.disabled = false;
   updateRoleAutoContinueMessage();
@@ -917,6 +1216,7 @@ function updateMatchScreens(room: Room<any>): void {
   const players = roomPlayers(room);
   if (!players) return;
   const phase = String(room.state?.phase ?? "lobby");
+  updateMathsOverlayForPhase(phase);
   const local = players.get(room.sessionId);
   const lateSpectator = Boolean(local?.isLateSpectator);
   const hasPrivateRole = localRole === "seeker" || localRole === "blender";
@@ -1217,6 +1517,7 @@ returnLobbyButton.addEventListener("click", () => safeRoomSend(activeRoom, "retu
 document.querySelector("#leave-button")!.addEventListener("click", () => leaveRoom(true));
 
 function leaveRoom(consented: boolean, message = "You left the room."): void {
+  closeMathsQuestionOverlay(true);
   arenaEntryGeneration += 1;
   hideSceneLoading();
   roleAcknowledgedForRound = true;
@@ -1325,6 +1626,7 @@ class PracticeGame {
   private movementSuppressedUntil = 0;
   private bustTargetId = "";
   private liftTargetId = "";
+  private mathsViewFlagId = "";
   private lastLiftAnimationAt = -Infinity;
   private liftLockedUntil = -Infinity;
   private globalBustBlockedUntil = 0;
@@ -2404,6 +2706,12 @@ class PracticeGame {
     this.inputAttached = true;
     window.addEventListener("resize", () => this.engine.resize());
     window.addEventListener("keydown", (event) => {
+      if (mathsQuestionMode !== "none") {
+        if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "KeyW", "KeyA", "KeyS", "KeyD", "KeyE", "KeyF", "KeyR"].includes(event.code)) {
+          event.preventDefault();
+        }
+        return;
+      }
       if (!this.localAlive
         && !this.spectatorPrivacyActive
         && ["ArrowLeft", "ArrowRight", "KeyA", "KeyD"].includes(event.code)) {
@@ -2676,7 +2984,8 @@ class PracticeGame {
     const inputX = Math.max(-1, Math.min(1, keyboardX + this.touchMove.x));
     const inputY = Math.max(-1, Math.min(1, keyboardY + this.touchMove.y));
     const movementAllowed = (!this.room || this.room.state.phase === "game")
-      && performance.now() >= this.movementSuppressedUntil;
+      && performance.now() >= this.movementSuppressedUntil
+      && mathsQuestionMode === "none";
     const horizontalOnlyTurn = this.localAlive
       && movementAllowed
       && Math.abs(inputX) > 0.08
@@ -3421,15 +3730,30 @@ class PracticeGame {
       nearestDistance = distance;
       this.liftTargetId = `player:${sessionId}`;
     });
+    this.mathsViewFlagId = "";
+    if (localRole === "seeker" && this.liftTargetId && !this.liftTargetId.startsWith("player:")) {
+      const flags = roomCollection(room, "flags");
+      flags?.forEach((flag: any, flagId: string) => {
+        if (this.mathsViewFlagId || flag.found || !flag.challengeActive) return;
+        if (flag.containerId !== this.liftTargetId || flag.challengerSessionId === room.sessionId) return;
+        this.mathsViewFlagId = flagId;
+      });
+    }
     const liftInProgress = performance.now() < this.liftLockedUntil;
     liftButton.disabled = liftInProgress || !this.liftTargetId;
-    liftButton.querySelector("span")!.textContent = liftInProgress ? "LIFTING" : "LIFT";
+    liftButton.querySelector("span")!.textContent = this.mathsViewFlagId
+      ? "VIEW ?"
+      : liftInProgress ? "LIFTING" : "LIFT";
     if (localRole === "blender") liftButton.classList.add("hidden");
   }
 
   private tryLift(): void {
     const activeButton = localRole === "blender" ? bustButton : liftButton;
     if (!this.liftTargetId || activeButton.disabled) return;
+    if (localRole === "seeker" && this.mathsViewFlagId) {
+      safeRoomSend(this.room, "view-question", this.mathsViewFlagId);
+      return;
+    }
     const now = performance.now();
     if (now < this.liftLockedUntil || now - this.lastLiftAnimationAt < PracticeGame.LIFT_BLEND_LOCK_MS) return;
     this.lastLiftAnimationAt = now;
@@ -3509,7 +3833,7 @@ class PracticeGame {
     playSoundEffect(assetUrl("assets/flag.mp3"), 0.9);
   }
 
-  private showFlagFoundCelebration(): void {
+  showFlagFoundCelebration(): void {
     const banner = document.createElement("div");
     banner.className = "flag-found-celebration";
     banner.innerHTML = "<strong>FLAG FOUND!</strong><span>Excellent searching!</span>";

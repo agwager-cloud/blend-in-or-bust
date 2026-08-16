@@ -56,7 +56,9 @@
               <span class="eyebrow">MULTIPLAYER LOBBY</span>
               <h1>ROOM <strong id="lobby-code">-----</strong></h1>
             </div>
-            <div id="connection-status" class="connection-status">CONNECTING</div>
+            <div class="lobby-heading-actions">
+              <div id="connection-status" class="connection-status">CONNECTING</div>
+            </div>
           </div>
           <p id="lobby-message">Share this code with friends on the same server.</p>
           <div id="player-list" class="player-list" aria-live="polite"></div>
@@ -67,16 +69,19 @@
                 <option value="180">3 minutes</option>
                 <option value="240" selected>4 minutes</option>
                 <option value="300">5 minutes</option>
+                <option value="600">10 minutes</option>
               </select>
             </label>
             <label>
               <span>BUSTERS</span>
               <select id="blender-count">
-                <option value="0" selected>Automatic</option>
+                <option value="0" selected>Automatic (1 per 4)</option>
                 <option value="1">1 Buster</option>
                 <option value="2">2 Busters</option>
                 <option value="3">3 Busters</option>
                 <option value="4">4 Busters</option>
+                <option value="5">5 Busters</option>
+                <option value="6">6 Busters</option>
               </select>
             </label>
             <label>
@@ -222,6 +227,32 @@
           </div>
         </section>
       </section>
+        <section id="maths-question-overlay" class="maths-question-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="maths-question-title">
+          <div id="maths-question-panel" class="maths-question-panel">
+            <header class="maths-question-heading">
+              <div>
+                <span class="eyebrow">FLAG CHALLENGE</span>
+                <h2 id="maths-question-title">MATHS QUESTION</h2>
+              </div>
+              <button id="maths-spectator-close" class="maths-spectator-close hidden" type="button">BACK TO GAME</button>
+            </header>
+            <div id="maths-question-scroll" class="maths-question-scroll" aria-label="Maths question image. Drag to view the full question.">
+              <img id="maths-question-image" class="maths-question-image" alt="Random multiple choice maths question" draggable="false" />
+            </div>
+            <p id="maths-question-help" class="maths-question-help">Drag the question to view the full image if needed.</p>
+            <div id="maths-question-status" class="maths-question-status" aria-live="assertive">
+              <span id="maths-question-feedback">Choose the correct answer to collect the flag.</span>
+              <strong id="maths-question-countdown" class="maths-question-countdown hidden">10</strong>
+            </div>
+            <div id="maths-answer-grid" class="maths-answer-grid" aria-label="Answer choices">
+              <button type="button" data-maths-answer="A">A</button>
+              <button type="button" data-maths-answer="B">B</button>
+              <button type="button" data-maths-answer="C">C</button>
+              <button type="button" data-maths-answer="D">D</button>
+              <button type="button" data-maths-answer="E">E</button>
+            </div>
+          </div>
+        </section>
     </div>
     <button id="sound-toggle" class="sound-toggle" type="button" aria-label="Mute all sound">
       <span aria-hidden="true">ON</span>
