@@ -414,16 +414,30 @@ export class BlendRoom extends Room<GameState> {
       // spacing, underscores or hyphens.
       this.removedNameKeys.add(this.nameKey(target.name));
 
-      // Remove the lobby record before closing the socket. A server-forced
-      // leave is reported to onLeave as an unexpected disconnect, which used
-      // to start the ten-second reconnection window and leave a ghost name in
-      // the host's lobby. Deleting all authoritative session data first makes
-      // the player disappear from every lobby immediately and prevents that
-      // stale record from being restored.
+      // Tell the target browser explicitly that the host removed it BEFORE the
+      // authoritative lobby record disappears. Relying on the WebSocket close
+      // event alone is not reliable on every mobile browser: the host could see
+      // the player vanish while the kicked phone/iPad remained on a stale lobby.
+      const targetClient = this.clients
+        .find((candidate) => candidate.sessionId === targetSessionId);
+      targetClient?.send("host-kicked", {
+        message: "The host removed you. Enter a different name before rejoining this room.",
+      });
+
+      // Delete all authoritative session/device data immediately so the host
+      // lobby updates at once and the kicked device cannot leave a ghost seat.
       this.removePlayerSession(targetSessionId);
-      this.clients
-        .find((candidate) => candidate.sessionId === targetSessionId)
-        ?.leave(4001);
+
+      // Give the explicit message a moment to reach the browser, then forcibly
+      // close the old socket as a backup. If the browser already left after
+      // receiving host-kicked this is harmless.
+      if (targetClient) {
+        this.clock.setTimeout(() => {
+          this.clients
+            .find((candidate) => candidate.sessionId === targetSessionId)
+            ?.leave(4001);
+        }, 150);
+      }
     });
     this.onMessage("start", (client, value: unknown) => {
       const player = this.state.players.get(client.sessionId);

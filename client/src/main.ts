@@ -783,7 +783,28 @@ async function connectMultiplayer(action: MultiplayerAction): Promise<void> {
   }
 }
 
+function handleHostKick(room: Room<any>, message?: string): void {
+  if (!isCurrentRoom(room)) return;
+
+  // A host kick is not a connection failure. Clear every reconnect credential
+  // immediately so this browser cannot silently restore the removed session.
+  clearReconnectSession();
+  localStorage.removeItem("blend-player-name");
+  nameInput.value = "";
+
+  // Move back to the sign-in screen immediately instead of waiting for the
+  // WebSocket close event, which can be delayed or missed on some mobile
+  // browsers. The server also closes the old socket as a fallback.
+  const kickedRoom = room;
+  leaveRoom(false, message || "The host removed you. Enter a different name before rejoining this room.");
+  void kickedRoom.leave(true);
+  window.setTimeout(() => nameInput.focus(), 0);
+}
+
 function bindRoom(room: Room<any>, client: Client): void {
+  room.onMessage("host-kicked", ({ message }: { message?: string }) => {
+    handleHostKick(room, message);
+  });
   saveReconnectSession(room);
   connectionStatus.textContent = "CONNECTED";
   connectionStatus.classList.add("online");
@@ -979,14 +1000,9 @@ function bindRoom(room: Room<any>, client: Client): void {
   room.onLeave(async (code) => {
     if (activeRoom !== room) return;
     if (code === 4001) {
-      clearReconnectSession();
-      // A host removal requires a new name before this browser can rejoin the
-      // same room. Clear the saved value so the player cannot accidentally
-      // submit the removed name again without editing it.
-      localStorage.removeItem("blend-player-name");
-      nameInput.value = "";
-      leaveRoom(false, "The host removed you. Enter a different name before rejoining this room.");
-      window.setTimeout(() => nameInput.focus(), 0);
+      // Fallback for a forced close in case the explicit host-kicked message
+      // was not delivered before the socket closed.
+      handleHostKick(room);
       return;
     }
     if (code === 1000 || reconnecting || activeRoom !== room) return;

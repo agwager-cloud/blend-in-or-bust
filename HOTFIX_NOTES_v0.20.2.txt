@@ -1,0 +1,8 @@
+Blend In or Bust v0.20.2 - host kick reliability hotfix
+
+- Host REMOVE now sends an explicit host-kicked message to the target device before deleting the lobby record.
+- The kicked browser immediately clears its reconnect token and saved player name, exits the room, and returns to the sign-in screen.
+- The kicked player must enter a different name before rejoining the same room, preserving the existing host-removal policy.
+- The server still forcibly closes the kicked socket after a short delay as a backup if the explicit message is not processed.
+- The authoritative player/device session is removed immediately, so no ghost lobby seat or stale device reservation remains.
+- Includes all v0.20.1 connection, mobile-keyboard, live Maths, 10-minute mode, and lobby-width fixes.
