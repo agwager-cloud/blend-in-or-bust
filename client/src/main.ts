@@ -942,6 +942,14 @@ function bindRoom(room: Room<any>, client: Client): void {
     // collected it. Players should identify Blenders by observation only.
     game?.collectRubbishVisual(id);
   });
+  room.onMessage("rubbish-collect-confirmed", ({ id }: { id: string }) => {
+    if (!isCurrentRoom(room)) return;
+    game?.confirmPredictedRubbishPickup(id);
+  });
+  room.onMessage("rubbish-collect-rejected", ({ id }: { id: string }) => {
+    if (!isCurrentRoom(room)) return;
+    game?.rollbackPredictedRubbishPickup(id);
+  });
   room.onMessage("bot-lift", ({ containerId }: { containerId: string }) => {
     if (!isCurrentRoom(room)) return;
     game?.handleBotLift(containerId);
@@ -1859,7 +1867,11 @@ class PracticeGame {
   // Viewing an active Maths challenge is intentionally much more generous than
   // normal Lift range so teammates can help even when furniture blocks access.
   private static readonly MATHS_VIEW_RANGE = 8.0;
-  private static readonly HUMAN_BUST_TARGET_RANGE = 4.5;
+  // Interactions should feel immediate on phones/tablets even while both
+  // players are running. The server keeps a slightly wider validation radius
+  // for network-latency tolerance.
+  private static readonly HUMAN_BUST_TARGET_RANGE = 6.0;
+  private static readonly LOCAL_RUBBISH_PICKUP_RANGE = 2.15;
   private static readonly PILLAR_ROOM_INDICES = new Set([1, 3, 5, 9, 15, 19, 21, 23]);
   private engine: Engine;
   private scene: Scene;
@@ -1882,9 +1894,11 @@ class PracticeGame {
   private flagMeshes = new Map<string, TransformNode>();
   private rubbishMeshes = new Map<string, TransformNode>();
   private rubbishCollectedOverrides = new Set<string>();
+  private pendingRubbishPickups = new Set<string>();
   private crimeMeshes = new Map<string, TransformNode>();
   private room: Room<any> | undefined;
   private lastNetworkSend = 0;
+  private currentMoving = false;
   private currentDisguiseName = "";
   private localAlive = true;
   private localLateSpectator = false;
@@ -2002,6 +2016,7 @@ class PracticeGame {
     this.clearFlags();
     this.clearRubbish();
     this.rubbishCollectedOverrides.clear();
+    this.pendingRubbishPickups.clear();
     this.clearCrimes();
     this.playerRoomName = "";
     this.crimeRoomAudio.pause();
@@ -2155,7 +2170,7 @@ class PracticeGame {
     const startedAt = performance.now();
     const animate = () => {
       if (root.isDisposed()) return;
-      const amount = Math.min(1, (performance.now() - startedAt) / 280);
+      const amount = Math.min(1, (performance.now() - startedAt) / 120);
       root.scaling.setAll(Math.max(0.01, 1 - amount));
       root.position.y = Math.sin(amount * Math.PI) * 0.55;
       root.rotation.y += 0.12;
@@ -3322,7 +3337,12 @@ class PracticeGame {
     // Update remote interpolation before using a remote seeker as the camera
     // target. Previously the spectator camera followed the avatar's prior
     // frame, then the avatar moved underneath it.
+    this.currentMoving = moving;
     this.updateMultiplayer(dt, moving);
+    // Predict the local rubbish pickup immediately. The server still validates
+    // it, but the Blender never waits for a network round-trip to see the item
+    // disappear beneath their feet.
+    this.updateLocalRubbishPickup();
 
     let cameraFocus = this.playerRoot.position;
     let cameraTarget = cameraFocus.add(new Vector3(
@@ -3557,6 +3577,52 @@ class PracticeGame {
     }
   }
 
+  private updateLocalRubbishPickup(): void {
+    const room = this.room;
+    if (!room || localRole !== "seeker" || !this.localAlive
+      || room.state.phase !== "game" || mathsQuestionMode !== "none") return;
+    const rubbish = roomCollection(room, "rubbish");
+    if (!rubbish) return;
+
+    let nearestId = "";
+    let nearestDistance = PracticeGame.LOCAL_RUBBISH_PICKUP_RANGE;
+    rubbish.forEach((item: any, id: string) => {
+      if (item.collected || this.rubbishCollectedOverrides.has(id) || this.pendingRubbishPickups.has(id)) return;
+      const distance = Math.hypot(
+        this.playerRoot.position.x - Number(item.x),
+        this.playerRoot.position.z - Number(item.z),
+      );
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearestId = id;
+      }
+    });
+    if (!nearestId) return;
+
+    // Send a fresh position before the interaction; Colyseus/WebSocket ordering
+    // guarantees the server validates against this same location. Then hide the
+    // rubbish locally immediately rather than waiting for the round-trip.
+    this.sendCurrentPositionNow();
+    if (!safeRoomSend(room, "collect-rubbish", { id: nearestId })) return;
+    this.pendingRubbishPickups.add(nearestId);
+    this.collectRubbishVisual(nearestId);
+  }
+
+  confirmPredictedRubbishPickup(id: string): void {
+    this.pendingRubbishPickups.delete(id);
+  }
+
+  rollbackPredictedRubbishPickup(id: string): void {
+    if (!this.pendingRubbishPickups.delete(id)) return;
+    const room = this.room;
+    const item = room ? roomCollection(room, "rubbish")?.get(id) : undefined;
+    if (!item || item.collected) return;
+    this.rubbishCollectedOverrides.delete(id);
+    if (!this.rubbishMeshes.has(id)) {
+      this.rubbishMeshes.set(id, this.createRubbish(id, Number(item.x), Number(item.z), Number(item.variant ?? 0)));
+    }
+  }
+
   private updateRubbish(room: Room<any>): void {
     const present = new Set<string>();
     const rubbish = roomCollection(room, "rubbish");
@@ -3564,6 +3630,7 @@ class PracticeGame {
     rubbish.forEach((item: any, id: string) => {
       if (item.collected) {
         this.rubbishCollectedOverrides.delete(id);
+        this.pendingRubbishPickups.delete(id);
         return;
       }
       if (this.rubbishCollectedOverrides.has(id)) return;
@@ -3914,11 +3981,26 @@ class PracticeGame {
     for (const root of this.rubbishMeshes.values()) root.dispose();
     this.rubbishMeshes.clear();
     this.rubbishCollectedOverrides.clear();
+    this.pendingRubbishPickups.clear();
   }
 
   private clearCrimes(): void {
     for (const root of this.crimeMeshes.values()) root.dispose();
     this.crimeMeshes.clear();
+  }
+
+  private sendCurrentPositionNow(): void {
+    const room = this.room;
+    if (!room || !this.localAlive || room.state.phase !== "game") return;
+    if (safeRoomSend(room, "move", {
+      x: this.playerRoot.position.x,
+      y: this.playerRoot.position.y,
+      z: this.playerRoot.position.z,
+      rotation: this.playerRoot.rotation.y,
+      moving: this.currentMoving,
+    })) {
+      this.lastNetworkSend = performance.now();
+    }
   }
 
   private updateBustControl(): void {
@@ -3932,9 +4014,15 @@ class PracticeGame {
     let nearestDistance = PracticeGame.HUMAN_BUST_TARGET_RANGE;
     players.forEach((player: any, sessionId: string) => {
       if (sessionId === room.sessionId || blenderTeammates.has(sessionId) || !player.alive) return;
+      // Target what the Buster can actually see, not the older schema position.
+      // Remote avatars are interpolated every rendered frame, which makes the
+      // BUST button reliable when both players are moving quickly.
+      const avatar = this.remotePlayers.get(sessionId);
+      const targetX = avatar?.root.isEnabled() ? avatar.root.position.x : Number(player.x);
+      const targetZ = avatar?.root.isEnabled() ? avatar.root.position.z : Number(player.z);
       const distance = Math.hypot(
-        this.playerRoot.position.x - player.x,
-        this.playerRoot.position.z - player.z,
+        this.playerRoot.position.x - targetX,
+        this.playerRoot.position.z - targetZ,
       );
       if (distance < nearestDistance) {
         nearestDistance = distance;
@@ -3958,8 +4046,24 @@ class PracticeGame {
   }
 
   private tryBust(): void {
-    if (!this.bustTargetId || bustButton.disabled) return;
-    safeRoomSend(this.room, "bust", this.bustTargetId);
+    if (!this.bustTargetId || bustButton.disabled || !this.room) return;
+    const targetId = this.bustTargetId;
+    const player = roomPlayers(this.room)?.get(targetId);
+    const avatar = this.remotePlayers.get(targetId);
+    const targetX = avatar?.root.isEnabled() ? avatar.root.position.x : Number(player?.x ?? 0);
+    const targetZ = avatar?.root.isEnabled() ? avatar.root.position.z : Number(player?.z ?? 0);
+
+    // WebSocket messages are ordered. Push our exact current position first,
+    // then send the visual target snapshot used for lag-compensated validation.
+    // One button press is therefore enough even while both players are running.
+    this.sendCurrentPositionNow();
+    safeRoomSend(this.room, "bust", {
+      targetSessionId: targetId,
+      attackerX: this.playerRoot.position.x,
+      attackerZ: this.playerRoot.position.z,
+      targetX,
+      targetZ,
+    });
   }
 
   private updateLiftControl(): void {

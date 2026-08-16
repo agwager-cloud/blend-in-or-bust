@@ -1,0 +1,12 @@
+Blend In or Bust v0.20.9
+
+Instant interaction responsiveness
+- Rubbish pickup now uses immediate local prediction: the item begins disappearing on the same frame the Blender reaches it instead of waiting for the next movement packet and server round-trip.
+- Added an explicit collect-rubbish interaction message with server validation and rollback if a predicted pickup is rejected.
+- Increased rubbish pickup acceptance range from 1.55 to 2.45 world units and reduced the pickup animation to 120 ms.
+- Bust targeting now uses the remote avatar position actually visible on screen rather than an older schema position.
+- Increased the visible human Bust radius from 4.5 to 6.0 world units.
+- Increased the authoritative server Bust acceptance radius to 7.0 world units for movement/network tolerance.
+- Pressing Bust sends the Buster's exact current position immediately before the Bust request.
+- Bust requests include the visible attacker/target snapshot; the server uses sanity-checked lag compensation when both players are running.
+- Existing Bust cooldown, role rules, Maths interactions, bot balance, objective counts and rubbish identity privacy remain unchanged.

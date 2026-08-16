@@ -16,6 +16,14 @@ interface MoveMessage {
   moving: boolean;
 }
 
+interface BustMessage {
+  targetSessionId?: string;
+  attackerX?: number;
+  attackerZ?: number;
+  targetX?: number;
+  targetZ?: number;
+}
+
 type BotPurpose = "roam" | "inspect" | "clean" | "pursue";
 
 interface BotTarget {
@@ -42,7 +50,14 @@ export class BlendRoom extends Room<GameState> {
   private static readonly GLOBAL_BUST_COOLDOWN_MS = 10_000;
   private static readonly BOT_PROP_INTERACT_RANGE = 3.1;
   private static readonly MATHS_VIEW_RANGE = 8.0;
-  private static readonly HUMAN_BUST_ACCEPT_RANGE = 5.0;
+  // The browser only offers BUST within 6 world units. The server accepts a
+  // slightly wider authoritative radius so two running players do not outrun
+  // one another between network ticks.
+  private static readonly HUMAN_BUST_ACCEPT_RANGE = 7.0;
+  private static readonly HUMAN_BUST_CLIENT_SNAPSHOT_RANGE = 6.25;
+  private static readonly BUST_ATTACKER_SNAPSHOT_TOLERANCE = 2.25;
+  private static readonly BUST_TARGET_SNAPSHOT_TOLERANCE = 5.5;
+  private static readonly RUBBISH_PICKUP_ACCEPT_RANGE = 2.45;
   private static readonly BUSTED_RESULT_HOLD_MS = 2_000;
   private static readonly BOT_LIFT_COOLDOWN_MS = 4_800;
   private static readonly ROOM_CENTERS = [-40, -20, 0, 20, 40] as const;
@@ -141,6 +156,40 @@ export class BlendRoom extends Room<GameState> {
       this.tryCollectFlag(client.sessionId, player);
       this.tryCollectRubbish(client.sessionId, player);
     });
+    this.onMessage("collect-rubbish", (client, message: unknown) => {
+      const id = typeof message === "string"
+        ? message
+        : typeof message === "object" && message !== null && typeof (message as { id?: unknown }).id === "string"
+          ? String((message as { id: string }).id)
+          : "";
+      const player = this.state.players.get(client.sessionId);
+      const rubbish = id ? this.state.rubbish.get(id) : undefined;
+      const reject = (reason: string) => client.send("rubbish-collect-rejected", { id, reason });
+      if (!id || !player?.alive || player.isLateSpectator || this.state.phase !== "game") {
+        reject("not-active");
+        return;
+      }
+      if (this.roles.get(client.sessionId) !== "seeker" || this.mathsChallengeForPlayer(client.sessionId)) {
+        reject("not-blender");
+        return;
+      }
+      if (!rubbish) {
+        reject("missing");
+        return;
+      }
+      if (rubbish.collected) {
+        // Another Blender already won the race. The optimistic local removal is
+        // still correct, so do not ask this client to put the rubbish back.
+        client.send("rubbish-collect-confirmed", { id });
+        return;
+      }
+      const distanceSquared = (player.x - rubbish.x) ** 2 + (player.z - rubbish.z) ** 2;
+      if (distanceSquared > BlendRoom.RUBBISH_PICKUP_ACCEPT_RANGE ** 2) {
+        reject("out-of-range");
+        return;
+      }
+      this.collectRubbish(rubbish);
+    });
     this.onMessage("disguise", (client, value: unknown) => {
       const player = this.state.players.get(client.sessionId);
       if (!player?.alive || this.state.phase !== "game" || this.mathsChallengeForPlayer(client.sessionId)) return;
@@ -163,9 +212,11 @@ export class BlendRoom extends Room<GameState> {
         disguise,
       });
     });
-    this.onMessage("bust", (client, targetSessionId: unknown) => {
+    this.onMessage("bust", (client, message: unknown) => {
       try {
-        const requestedTargetId = typeof targetSessionId === "string" ? targetSessionId : "";
+        const legacyTargetId = typeof message === "string" ? message : "";
+        const payload = typeof message === "object" && message !== null ? message as BustMessage : undefined;
+        const requestedTargetId = legacyTargetId || (typeof payload?.targetSessionId === "string" ? payload.targetSessionId : "");
         const reject = (reason: string) => client.send("bust-rejected", {
           targetSessionId: requestedTargetId,
           reason,
@@ -193,10 +244,29 @@ export class BlendRoom extends Room<GameState> {
         // so the hidden flag immediately becomes available to another Blender.
         const now = Date.now();
         const distanceSquared = (attacker.x - target.x) ** 2 + (attacker.z - target.z) ** 2;
-        // The browser highlights targets inside 4.5 units. Accept a slightly
-        // larger 5.0-unit server radius so a running Blender is not missed
-        // solely because the authoritative position is one network tick ahead.
-        if (distanceSquared > BlendRoom.HUMAN_BUST_ACCEPT_RANGE ** 2) {
+        let inRange = distanceSquared <= BlendRoom.HUMAN_BUST_ACCEPT_RANGE ** 2;
+
+        // Lag compensation for two moving players. The client submits the exact
+        // positions visible at the instant the BUST button is pressed. We only
+        // trust that snapshot when both claims remain close to the server's
+        // authoritative positions, then allow the same 6-ish-unit interaction
+        // the player actually saw on screen. This removes the need to spam BUST
+        // without allowing arbitrary long-distance eliminations.
+        if (!inRange && payload) {
+          const attackerX = this.safeNumber(payload.attackerX, Number.NaN);
+          const attackerZ = this.safeNumber(payload.attackerZ, Number.NaN);
+          const targetX = this.safeNumber(payload.targetX, Number.NaN);
+          const targetZ = this.safeNumber(payload.targetZ, Number.NaN);
+          if ([attackerX, attackerZ, targetX, targetZ].every(Number.isFinite)) {
+            const attackerError = Math.hypot(attacker.x - attackerX, attacker.z - attackerZ);
+            const targetError = Math.hypot(target.x - targetX, target.z - targetZ);
+            const snapshotDistance = Math.hypot(attackerX - targetX, attackerZ - targetZ);
+            inRange = attackerError <= BlendRoom.BUST_ATTACKER_SNAPSHOT_TOLERANCE
+              && targetError <= BlendRoom.BUST_TARGET_SNAPSHOT_TOLERANCE
+              && snapshotDistance <= BlendRoom.HUMAN_BUST_CLIENT_SNAPSHOT_RANGE;
+          }
+        }
+        if (!inRange) {
           reject("out-of-range");
           return;
         }
@@ -235,7 +305,11 @@ export class BlendRoom extends Room<GameState> {
         console.error(`[BlendRoom ${this.roomCode}] Bust handler failed`, error);
         try {
           client.send("bust-rejected", {
-            targetSessionId: typeof targetSessionId === "string" ? targetSessionId : "",
+            targetSessionId: typeof message === "string"
+              ? message
+              : typeof (message as BustMessage | undefined)?.targetSessionId === "string"
+                ? String((message as BustMessage).targetSessionId)
+                : "",
             reason: "server-error",
           });
         } catch {
@@ -1082,13 +1156,18 @@ export class BlendRoom extends Room<GameState> {
     for (const rubbish of this.state.rubbish.values()) {
       if (rubbish.collected) continue;
       const distanceSquared = (player.x - rubbish.x) ** 2 + (player.z - rubbish.z) ** 2;
-      if (distanceSquared > 1.55 ** 2) continue;
-      rubbish.collected = true;
-      this.state.rubbishCollected += 1;
-      this.broadcast("rubbish-collected", { id: rubbish.id });
-      this.checkBlenderObjectiveWin();
+      if (distanceSquared > BlendRoom.RUBBISH_PICKUP_ACCEPT_RANGE ** 2) continue;
+      this.collectRubbish(rubbish);
       return;
     }
+  }
+
+  private collectRubbish(rubbish: RubbishState): void {
+    if (rubbish.collected) return;
+    rubbish.collected = true;
+    this.state.rubbishCollected += 1;
+    this.broadcast("rubbish-collected", { id: rubbish.id });
+    this.checkBlenderObjectiveWin();
   }
 
   private nextMathsQuestionId(): string | undefined {
