@@ -1,0 +1,32 @@
+Blend In or Bust v0.21.0 - 40 Player Expansion
+
+BIG UPDATE
+- Raises the classroom participant limit from 24 to 40 human players.
+- Automatic Buster balance remains 1 Buster per 4 participants and now scales up to 10 Busters at 40 players.
+- Manual Buster selection now supports 1-10 Busters.
+- Objective scaling adds new 25-30, 31-35 and 36-40 player bands.
+- Rubbish and flag totals increase for larger classes while preserving the existing <=24-player balance.
+- 40-player spawn distribution prevents players 26-40 from spawning directly on top of earlier participants.
+- Testing bots still add up to 8 bots, but never push the active participant total beyond 40.
+- Returning late spectators can be promoted into open participant places in the lobby up to the new 40-player cap.
+- Room transport allows a small spectator reserve above the 40 active-player cap so late CCTV viewers can still join an active full-class round.
+- Lobby capacity text and ROOM FULL messaging now show 40 players.
+
+40-PLAYER AUTOMATIC ROLE BALANCE
+- 40 participants -> 10 Busters / 30 Blenders.
+- 36-39 participants -> 9 Busters.
+- 32-35 participants -> 8 Busters.
+- 28-31 participants -> 7 Busters.
+- Existing automatic rule remains floor(players / 4), minimum 1 when there is more than one participant.
+
+LARGE-CLASS OBJECTIVE TARGETS
+For 36-40 participants:
+- 3 min: 9 flags / 40 rubbish
+- 4 min: 10 flags / 48 rubbish
+- 5 min: 11 flags / 52 rubbish
+- 10 min: 16 flags / 68 rubbish
+
+DEPLOYMENT
+1. Render/server update IS REQUIRED because the authoritative player cap, Buster balance, objectives and spawn logic are server-side.
+2. itch.io client update IS REQUIRED for the 40-player lobby display and 7-10 Buster host options.
+3. No browser /health check has been added; the existing school-network WebSocket-only build safeguard remains unchanged.

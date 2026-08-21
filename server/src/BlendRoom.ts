@@ -64,7 +64,11 @@ export class BlendRoom extends Room<GameState> {
   private static readonly CENTRE_ROOM_INDEX = 12;
   private static readonly GRAND_GALLERY_INDEX = 7;
   private static readonly PILLAR_ROOM_INDICES = new Set([1, 3, 5, 9, 15, 19, 21, 23]);
-  maxClients = 24;
+  private static readonly HUMAN_PLAYER_LIMIT = 40;
+  private static readonly MAX_BUSTERS = 10;
+  // Keep a small connection reserve for late CCTV spectators after a 40-player
+  // round has started. Spectators do not count toward the participant cap.
+  maxClients = 48;
   state = new GameState();
   private roomCode = "";
   private deviceSessions = new Map<string, string>();
@@ -567,10 +571,10 @@ export class BlendRoom extends Room<GameState> {
     if (this.state.phase === "lobby") {
       const lobbyParticipants = [...this.state.players.values()]
         .filter((player) => !player.isBot && !player.isLateSpectator).length;
-      if (lobbyParticipants >= 24) {
+      if (lobbyParticipants >= BlendRoom.HUMAN_PLAYER_LIMIT) {
         throw new ServerError(
           403,
-          "ROOM FULL - this room already has 24 players. Please host a new room for the additional students.",
+          `ROOM FULL - this room already has ${BlendRoom.HUMAN_PLAYER_LIMIT} players. Please host a new room for the additional students.`,
         );
       }
     }
@@ -786,7 +790,7 @@ export class BlendRoom extends Room<GameState> {
     this.state.blenderOverride = this.clampInteger(
       settings.blenderOverride,
       0,
-      6,
+      BlendRoom.MAX_BUSTERS,
       this.state.blenderOverride,
     );
     this.state.botsEnabled = settings.botsEnabled === true;
@@ -838,7 +842,7 @@ export class BlendRoom extends Room<GameState> {
       this.assignSpawn(player, index);
     });
     if (this.state.botsEnabled) {
-      this.addTestingBots(Math.min(8, Math.max(0, 24 - humanSessionIds.length)));
+      this.addTestingBots(Math.min(8, Math.max(0, BlendRoom.HUMAN_PLAYER_LIMIT - humanSessionIds.length)));
     }
     this.state.players.forEach((player, sessionId) => {
       if (player.isLateSpectator) return;
@@ -854,10 +858,10 @@ export class BlendRoom extends Room<GameState> {
       .map(([sessionId]) => sessionId);
     const shuffled = [...participantIds].sort(() => Math.random() - 0.5);
     // Automatic role balance is one public Buster for every four connected
-    // participants. This scales cleanly to 6 Busters / 18 Blenders at 24 players.
+    // participants. This scales to 10 Busters / 30 Blenders at 40 players.
     const automatic = participantIds.length <= 1
       ? 0
-      : Math.min(6, Math.max(1, Math.floor(participantIds.length / 4)));
+      : Math.min(BlendRoom.MAX_BUSTERS, Math.max(1, Math.floor(participantIds.length / 4)));
     const blenderCount = Math.min(
       Math.max(0, this.state.blenderOverride || automatic),
       Math.max(0, participantIds.length - 1),
@@ -1490,7 +1494,10 @@ export class BlendRoom extends Room<GameState> {
     if (players <= 10) return 2;
     if (players <= 15) return 3;
     if (players <= 20) return 4;
-    return 5;
+    if (players <= 24) return 5;
+    if (players <= 30) return 6;
+    if (players <= 35) return 7;
+    return 8;
   }
 
   private flagCountForPlayers(players: number, roundSeconds: number): number {
@@ -1501,10 +1508,10 @@ export class BlendRoom extends Room<GameState> {
     // linearly, because Blenders are progressively busted and late objectives
     // become harder to locate.
     const flagsByRound: Record<number, readonly number[]> = {
-      180: [2, 3, 3, 4, 5, 6],
-      240: [3, 3, 4, 5, 6, 7],
-      300: [3, 4, 5, 6, 7, 8],
-      600: [4, 5, 6, 8, 9, 10],
+      180: [2, 3, 3, 4, 5, 6, 7, 8, 9],
+      240: [3, 3, 4, 5, 6, 7, 8, 9, 10],
+      300: [3, 4, 5, 6, 7, 8, 9, 10, 11],
+      600: [4, 5, 6, 8, 9, 10, 12, 14, 16],
     };
 
     const round = [180, 240, 300, 600].includes(roundSeconds) ? roundSeconds : 240;
@@ -1515,10 +1522,10 @@ export class BlendRoom extends Room<GameState> {
     const band = this.objectiveBandForPlayers(players);
 
     const rubbishByRound: Record<number, readonly number[]> = {
-      180: [8, 10, 14, 18, 22, 26],
-      240: [10, 14, 18, 22, 26, 30],
-      300: [12, 16, 22, 26, 30, 34],
-      600: [18, 22, 28, 34, 40, 44],
+      180: [8, 10, 14, 18, 22, 26, 32, 36, 40],
+      240: [10, 14, 18, 22, 26, 30, 36, 42, 48],
+      300: [12, 16, 22, 26, 30, 34, 40, 46, 52],
+      600: [18, 22, 28, 34, 40, 44, 52, 60, 68],
     };
 
     const round = [180, 240, 300, 600].includes(roundSeconds) ? roundSeconds : 240;
@@ -1583,7 +1590,7 @@ export class BlendRoom extends Room<GameState> {
       .filter((player) => !player.isBot && !player.isLateSpectator).length;
     this.state.players.forEach((player) => {
       if (player.isBot) return;
-      if (player.isLateSpectator && participantCount < 24) {
+      if (player.isLateSpectator && participantCount < BlendRoom.HUMAN_PLAYER_LIMIT) {
         player.isLateSpectator = false;
         participantCount += 1;
       }
@@ -2483,21 +2490,26 @@ export class BlendRoom extends Room<GameState> {
   }
 
   private assignSpawn(player: PlayerState, index: number): void {
-    // Twenty-four players receive twenty-four different rooms in the 5x5 map.
-    // The central rotunda is used first, followed by corners and then a spread
-    // across the remaining galleries.
+    // The first 25 participants receive one room each. Players 26-40 reuse the
+    // same spread but take a different safe offset inside that room, preventing
+    // the overlapping spawns that would occur if the old 24-player logic simply
+    // wrapped around.
     const roomOrder = [
       12, 0, 24, 4, 20, 2, 22, 10, 14, 6, 8, 16,
       18, 1, 3, 5, 9, 15, 19, 21, 23, 7, 11, 13, 17,
     ];
     const roomIndex = roomOrder[index % roomOrder.length];
+    const roomCycle = Math.floor(index / roomOrder.length);
     const roomX = BlendRoom.ROOM_CENTERS[roomIndex % 5];
     const roomZ = BlendRoom.ROOM_CENTERS[Math.floor(roomIndex / 5)];
     const preferredOffsets: Array<[number, number]> = [
       [-3.2, 2.8], [3.3, -2.6], [0, 4.3], [0, -4.3], [-4.2, 0], [4.2, 0],
     ];
-    const offset = preferredOffsets.find(([offsetX, offsetZ]) =>
-      !this.isMuseumBlocked(roomX + offsetX, roomZ + offsetZ)) ?? [0, 0];
+    const safeOffsets = preferredOffsets.filter(([offsetX, offsetZ]) =>
+      !this.isMuseumBlocked(roomX + offsetX, roomZ + offsetZ));
+    const offset = safeOffsets.length > 0
+      ? safeOffsets[roomCycle % safeOffsets.length]
+      : [0, 0] as [number, number];
     player.x = roomX + offset[0];
     player.y = 0;
     player.z = roomZ + offset[1];

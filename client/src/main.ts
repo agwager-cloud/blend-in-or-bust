@@ -563,7 +563,7 @@ function wait(milliseconds: number): Promise<void> {
 
 function isTerminalConnectionError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error ?? "");
-  return /room not found|room full|24 players|24 participants|removed from this room|different name|player name is already|name is already being used|already connected|other game tab|device could not be identified|invalid name|forbidden|unauthori[sz]ed|game is locked/i.test(message);
+  return /room not found|room full|40 players|40 participants|24 players|24 participants|removed from this room|different name|player name is already|name is already being used|already connected|other game tab|device could not be identified|invalid name|forbidden|unauthori[sz]ed|game is locked/i.test(message);
 }
 
 function isTerminalReconnectError(error: unknown): boolean {
@@ -573,8 +573,8 @@ function isTerminalReconnectError(error: unknown): boolean {
 
 function formatConnectionError(error: unknown): string {
   const message = error instanceof Error ? error.message : "Could not connect to the server.";
-  if (/full|24 players|24 participants/i.test(message)) {
-    return "ROOM FULL - this room already has 24 players. Please host a new room for the additional students.";
+  if (/full|40 players|40 participants|24 players|24 participants/i.test(message)) {
+    return "ROOM FULL - this room already has 40 players. Please host a new room for the additional students.";
   }
   if (/player name is already|name is already being used/i.test(message)) {
     return "NAME ALREADY TAKEN - another player in this room is using that name. Enter a different name and try again.";
@@ -1374,13 +1374,13 @@ function updateLobby(): void {
     else lobbyParticipants += 1;
   });
   playerList.classList.toggle("crowded", lobbyParticipants + lobbySpectators >= 13);
-  playerList.classList.toggle("full", lobbyParticipants >= 24);
-  lobbyMessage.classList.toggle("room-full", lobbyParticipants >= 24);
-  lobbyMessage.textContent = lobbyParticipants >= 24
-    ? "24 / 24 participants - ROOM FULL - additional students should host a new room."
+  playerList.classList.toggle("full", lobbyParticipants >= 40);
+  lobbyMessage.classList.toggle("room-full", lobbyParticipants >= 40);
+  lobbyMessage.textContent = lobbyParticipants >= 40
+    ? "40 / 40 participants - ROOM FULL - additional students should host a new room."
     : lobbySpectators > 0
-      ? `${lobbyParticipants} / 24 participants - ${lobbySpectators} spectators - Share code ${room.state.roomCode}`
-      : `${lobbyParticipants} / 24 participants - Share code ${room.state.roomCode}`;
+      ? `${lobbyParticipants} / 40 participants - ${lobbySpectators} spectators - Share code ${room.state.roomCode}`
+      : `${lobbyParticipants} / 40 participants - Share code ${room.state.roomCode}`;
 }
 
 function updateRoleReveal(): void {
@@ -1649,7 +1649,7 @@ async function waitForRoundState(room: Room<any>, generation: number): Promise<v
         else humanCount += 1;
       });
       const expectedBots = room.state?.botsEnabled
-        ? Math.min(8, Math.max(0, 24 - humanCount))
+        ? Math.min(8, Math.max(0, 40 - humanCount))
         : 0;
       if (botCount >= expectedBots) return;
       showSceneLoading(`Syncing players and testing bots... ${botCount} of ${expectedBots}`);

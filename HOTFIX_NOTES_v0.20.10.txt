@@ -1,0 +1,11 @@
+Blend In or Bust v0.20.10 - Touch Maths Question Scrolling
+
+FIXED
+- Restored tap-and-drag scrolling for large Maths question images on iPad and phone during live rounds.
+- The in-game anti-page-scroll touch handler now exempts the Maths question viewport instead of cancelling its touchmove events.
+- Maths question viewport explicitly allows native two-axis touch panning.
+- A-E answer buttons remain fixed and accessible while the question image is scrolled.
+
+UNCHANGED
+- No server changes.
+- Maths question bank, answers, Bust logic, rubbish collection, reconnect logic, objective balancing and roles are unchanged.
