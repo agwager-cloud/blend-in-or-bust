@@ -126,7 +126,7 @@ export class BlendRoom extends Room<GameState> {
   private roleAcknowledgementDeadline = 0;
   private roundLoadingDeadline = 0;
   private static readonly ROLE_ACKNOWLEDGEMENT_GRACE_MS = 12_000;
-  private static readonly ROUND_LOADING_TIMEOUT_MS = 120_000;
+  private static readonly ROUND_LOADING_TIMEOUT_MS = 60_000;
   private static readonly SYNCHRONIZED_REVEAL_MS = 4_000;
 
   onCreate(): void {
@@ -490,12 +490,14 @@ export class BlendRoom extends Room<GameState> {
       const player = this.state.players.get(client.sessionId);
       if (this.state.phase !== "loading" || !player?.alive || player.isBot || player.isLateSpectator) return;
       this.roundReadyClients.add(client.sessionId);
+      this.updateLoadingStatus();
       this.tryBeginSynchronizedReveal();
     });
     this.onMessage("role-ready", (client) => {
       const player = this.state.players.get(client.sessionId);
       if (this.state.phase !== "loading" || !player?.alive || player.isBot || player.isLateSpectator) return;
       this.roleReadyClients.add(client.sessionId);
+      this.updateLoadingStatus();
       this.tryBeginSynchronizedReveal();
     });
     this.onMessage("spectator-ready", (client) => {
@@ -680,8 +682,6 @@ export class BlendRoom extends Room<GameState> {
     }
     this.deviceSessions.set(deviceId, client.sessionId);
     this.sessionDevices.set(client.sessionId, deviceId);
-    client.send("room-info", { roomCode: this.roomCode });
-
     if (joiningInProgress) {
       client.send("late-spectator", { roomIndex: BlendRoom.CENTRE_ROOM_INDEX });
       this.sendSpectatorConcealment(client.sessionId);
@@ -709,6 +709,14 @@ export class BlendRoom extends Room<GameState> {
     if (!consented) {
       player.connected = false;
       this.reconnectingSessions.add(client.sessionId);
+      // A laptop/iPad dropping out during the synchronized museum load must not
+      // hold the entire class at "Waiting for the other players". The seat is
+      // still preserved for reconnection, but only currently connected humans
+      // participate in the loading gate.
+      if (this.state.phase === "loading") {
+        this.updateLoadingStatus();
+        this.tryBeginSynchronizedReveal();
+      }
       try {
         await this.allowReconnection(client, 45);
         // A same-device fresh join may deliberately supersede this stale seat
@@ -720,6 +728,10 @@ export class BlendRoom extends Room<GameState> {
           return;
         }
         player.connected = true;
+        if (this.state.phase === "loading") {
+          this.updateLoadingStatus();
+          this.tryBeginSynchronizedReveal();
+        }
         return;
       } catch {
         this.reconnectingSessions.delete(client.sessionId);
@@ -800,8 +812,25 @@ export class BlendRoom extends Room<GameState> {
 
   private startRound(): void {
     this.removeBots();
+
+    // A device can remain in Colyseus state for the 45-second reconnection grace
+    // window even though it is currently offline. If the host starts during that
+    // window, do not assign the offline seat a live role or make every connected
+    // student wait for a museum-ready message that can never arrive. Preserve the
+    // seat as a CCTV spectator so a successful reconnect still has somewhere safe
+    // to return during the active round.
+    this.state.players.forEach((player) => {
+      if (player.isBot || player.isLateSpectator || player.connected !== false) return;
+      player.isLateSpectator = true;
+      player.alive = false;
+      player.moving = false;
+      player.disguise = "";
+      player.spectateUnlockAt = Date.now();
+      player.spectateTarget = "security";
+    });
+
     const humanSessionIds = [...this.state.players]
-      .filter(([, player]) => !player.isBot && !player.isLateSpectator)
+      .filter(([, player]) => !player.isBot && !player.isLateSpectator && player.connected !== false)
       .map(([sessionId]) => sessionId);
     if (humanSessionIds.length === 0) return;
     this.clearMathsChallenges("new-round");
@@ -934,6 +963,7 @@ export class BlendRoom extends Room<GameState> {
     const loadingStartedAt = Date.now();
     this.roleAcknowledgementDeadline = loadingStartedAt + BlendRoom.ROLE_ACKNOWLEDGEMENT_GRACE_MS;
     this.roundLoadingDeadline = loadingStartedAt + BlendRoom.ROUND_LOADING_TIMEOUT_MS;
+    this.updateLoadingStatus(loadingStartedAt);
 
     // Send private roles only after the authoritative loading phase is active.
     // Players may acknowledge immediately, while the server automatically
@@ -964,8 +994,32 @@ export class BlendRoom extends Room<GameState> {
 
   private activeHumanSessionIds(): string[] {
     return [...this.state.players]
-      .filter(([, player]) => player.alive && !player.isBot && !player.isLateSpectator)
+      .filter(([, player]) =>
+        player.alive
+        && player.connected !== false
+        && !player.isBot
+        && !player.isLateSpectator)
       .map(([sessionId]) => sessionId);
+  }
+
+  private updateLoadingStatus(_now = Date.now()): void {
+    if (this.state.phase !== "loading") return;
+    const humans = this.activeHumanSessionIds();
+    const waitingSessionIds = humans.filter((sessionId) => !this.roundReadyClients.has(sessionId));
+    const waitingNames = waitingSessionIds
+      .map((sessionId) => this.state.players.get(sessionId)?.name ?? "")
+      .filter(Boolean);
+    this.state.loadingReady = Math.max(0, humans.length - waitingSessionIds.length);
+    this.state.loadingTotal = humans.length;
+    this.state.loadingWaiting = waitingSessionIds.length;
+    this.state.loadingWaitingNamesJson = JSON.stringify(waitingNames);
+  }
+
+  private clearLoadingStatus(): void {
+    this.state.loadingReady = 0;
+    this.state.loadingTotal = 0;
+    this.state.loadingWaiting = 0;
+    this.state.loadingWaitingNamesJson = "[]";
   }
 
   private tryBeginSynchronizedReveal(now = Date.now()): void {
@@ -983,6 +1037,7 @@ export class BlendRoom extends Room<GameState> {
   private beginSynchronizedReveal(now: number): void {
     if (this.state.phase !== "loading") return;
     this.state.phase = "reveal";
+    this.clearLoadingStatus();
     this.state.revealEndsAt = now + BlendRoom.SYNCHRONIZED_REVEAL_MS;
     this.state.roundEndsAt = this.state.revealEndsAt + this.state.roundSeconds * 1000;
     this.state.revealSecondsRemaining = Math.ceil(BlendRoom.SYNCHRONIZED_REVEAL_MS / 1000);
@@ -1538,6 +1593,7 @@ export class BlendRoom extends Room<GameState> {
     this.clearMathsChallenges("round-ended");
     this.state.winner = winner;
     this.state.phase = "results";
+    this.clearLoadingStatus();
     this.state.revealSecondsRemaining = 0;
     this.state.roundSecondsRemaining = 0;
     this.state.meetingSecondsRemaining = 0;
@@ -1567,6 +1623,7 @@ export class BlendRoom extends Room<GameState> {
     this.roleReadyClients.clear();
     this.roleAcknowledgementDeadline = 0;
     this.roundLoadingDeadline = 0;
+    this.clearLoadingStatus();
     this.state.flags.clear();
     this.state.rubbish.clear();
     this.state.crimes.clear();

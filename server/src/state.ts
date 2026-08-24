@@ -50,6 +50,13 @@ export class GameState extends Schema {
   @type({ map: CrimeState }) crimes = new MapSchema<CrimeState>();
   @type("string") phase = "lobby";
   @type("string") roomCode = "";
+  // Synchronized museum-loading progress lives in authoritative room state
+  // rather than a direct message. Older clients safely ignore these fields,
+  // which keeps server/client deployment order backwards compatible.
+  @type("number") loadingReady = 0;
+  @type("number") loadingTotal = 0;
+  @type("number") loadingWaiting = 0;
+  @type("string") loadingWaitingNamesJson = "[]";
   @type("number") flagsFound = 0;
   @type("number") flagsRequired = 0;
   @type("number") rubbishCollected = 0;

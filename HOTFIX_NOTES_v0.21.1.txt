@@ -1,0 +1,23 @@
+Blend In or Bust v0.21.1 - School Loading Reliability Hotfix
+
+FIXED: CLASS STUCK ON "MUSEUM READY - WAITING FOR THE OTHER PLAYERS"
+- The synchronized round-start gate now waits only for active players whose devices are currently connected.
+- A laptop/iPad that drops Wi-Fi or closes during museum loading no longer holds the entire class for the 45-second reconnection grace period.
+- If a lobby device is already offline when the host presses Start, that stale seat is safely moved to CCTV spectator mode instead of receiving a live role.
+- The maximum museum loading safety timeout is reduced from 120 seconds to 60 seconds. The round will therefore fail open rather than leaving a class waiting for two minutes if an unusual client never reports ready.
+- The host loading screen now shows how many players are still loading and, when available, their names. Other players see the remaining count.
+- Loading progress is stored in normal Colyseus room state, not a direct message, so an older itch.io client can safely coexist briefly while the Render update is deployed.
+
+FIXED: COLYSEUS room-info CONSOLE WARNING
+- Removed the direct room-info message that could arrive before the browser had registered its message handler.
+- The room code was already authoritative Colyseus state, so no functionality is lost.
+
+SCHOOL / ITCH.IO CONSOLE NOTES
+- The uploaded v0.21.0 source contains no call to screen.orientation.lock(). The NotSupportedError shown by the school browser is generated outside the game bundle (itch.io/browser wrapper behaviour), not by Blend In or Bust.
+- itch.io html-callback ERR_BLOCKED_BY_CLIENT is likewise an itch.io/browser filtering request and is not used by the game's WebSocket multiplayer connection.
+- Existing browser build safeguard remains: no /health preflight request is used.
+
+DEPLOYMENT
+1. Render/server update IS REQUIRED for the loading-gate fix.
+2. itch.io client update IS REQUIRED for the improved loading-status display and room-info cleanup.
+3. Recommended order: deploy Render/server first, then upload the itch.io v0.21.1 ZIP and refresh all browsers.

@@ -825,17 +825,13 @@ function handleHostKick(room: Room<any>, message?: string): void {
 }
 
 function bindRoom(room: Room<any>, client: Client): void {
+  let savedRoomCode = String(room.state?.roomCode ?? "");
   room.onMessage("host-kicked", ({ message }: { message?: string }) => {
     handleHostKick(room, message);
   });
   saveReconnectSession(room);
   connectionStatus.textContent = "CONNECTED";
   connectionStatus.classList.add("online");
-  room.onMessage("room-info", ({ roomCode }: { roomCode: string }) => {
-    if (!isCurrentRoom(room)) return;
-    lobbyCode.textContent = roomCode;
-    saveReconnectSession(room, roomCode);
-  });
   room.onMessage("role", ({
     role,
     autoContinueAt,
@@ -1047,6 +1043,11 @@ function bindRoom(room: Room<any>, client: Client): void {
   room.onStateChange(() => {
     if (!isCurrentRoom(room)) return;
     updateLobby();
+    const currentRoomCode = String(room.state?.roomCode ?? "");
+    if (/^\d{5}$/.test(currentRoomCode) && currentRoomCode !== savedRoomCode) {
+      savedRoomCode = currentRoomCode;
+      saveReconnectSession(room, currentRoomCode);
+    }
     const phase = String(room.state?.phase ?? "lobby");
     const matchInProgress = ["loading", "reveal", "game", "discussion", "voting", "verdict", "results"]
       .includes(phase);
@@ -1057,7 +1058,7 @@ function bindRoom(room: Room<any>, client: Client): void {
     updateMeetingUi(room);
     if (!gameScreen.classList.contains("hidden") && game) {
       if (phase === "loading") {
-        showSceneLoading("Museum ready. Waiting for the other players...");
+        showSceneLoading(loadingWaitMessage(room));
       } else if (phase === "reveal") {
         // The server starts a fresh reveal only after all active devices report
         // that their museum is loaded. Remove the loading screen now so every
@@ -1333,6 +1334,30 @@ mathsQuestionScroll.addEventListener("pointerup", stopMathsMouseDrag);
 mathsQuestionScroll.addEventListener("pointercancel", stopMathsMouseDrag);
 window.addEventListener("resize", updateMathsQuestionPanHint);
 
+function loadingWaitMessage(room: Room<any>): string {
+  const total = Math.max(0, Number(room.state?.loadingTotal) || 0);
+  const waiting = Math.max(0, Number(room.state?.loadingWaiting) || 0);
+  if (total <= 0) return "Museum ready. Waiting for the other players...";
+  if (waiting <= 0) return "Museum ready. Starting the round...";
+
+  let waitingNames: string[] = [];
+  try {
+    const parsed = JSON.parse(String(room.state?.loadingWaitingNamesJson ?? "[]"));
+    if (Array.isArray(parsed)) waitingNames = parsed.map((name) => String(name)).filter(Boolean);
+  } catch {
+    waitingNames = [];
+  }
+
+  const localIsHost = Boolean(roomPlayers(room)?.get(room.sessionId)?.isHost);
+  if (localIsHost && waitingNames.length > 0) {
+    const visibleNames = waitingNames.slice(0, 4);
+    const extra = waitingNames.length - visibleNames.length;
+    const names = `${visibleNames.join(", ")}${extra > 0 ? ` +${extra} more` : ""}`;
+    return `Museum ready. Waiting for ${waiting} player${waiting === 1 ? "" : "s"}: ${names}`;
+  }
+  return `Museum ready. Waiting for ${waiting} other player${waiting === 1 ? "" : "s"}...`;
+}
+
 function updateLobby(): void {
   const room = activeRoom;
   if (!room?.state) return;
@@ -1453,7 +1478,7 @@ function acknowledgeCurrentRole(showWaitingMessage = true): void {
   roleReveal.classList.remove("role-reveal-priority");
   if (showWaitingMessage && activeRoom?.state?.phase === "loading") {
     showSceneLoading(game
-      ? "Role confirmed. Waiting for the other players..."
+      ? loadingWaitMessage(activeRoom)
       : "Role confirmed. Loading the museum...");
   }
 }
@@ -1702,7 +1727,7 @@ async function enterMultiplayerArena(room: Room<any>, generation: number): Promi
   updateRoleReveal();
   updateMatchScreens(room);
   if (String(room.state?.phase) === "loading") {
-    showSceneLoading("Museum ready. Waiting for the other players...");
+    showSceneLoading(loadingWaitMessage(room));
   } else {
     window.requestAnimationFrame(() => hideSceneLoading());
   }
