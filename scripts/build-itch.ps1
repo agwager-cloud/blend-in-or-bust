@@ -1,12 +1,12 @@
 param(
-    [string]$RenderUrl = "https://blend-in-or-bust-server.onrender.com",
+    [string]$RenderUrl = "https://blend-in-or-bust.pifractal.com",
     [string]$Version = "0.20.0"
 )
 
 $ErrorActionPreference = "Stop"
 
 if ($RenderUrl -notmatch '^https://[^/]+$') {
-    throw "RenderUrl must look like https://your-service.onrender.com with no path or trailing slash."
+    throw "RenderUrl must look like https://blend-in-or-bust.pifractal.com with no path or trailing slash."
 }
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
